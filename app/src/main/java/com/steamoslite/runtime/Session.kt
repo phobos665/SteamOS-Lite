@@ -92,6 +92,11 @@ class Session(
             "FEX_HALFBARRIERTSOENABLED=1",
             "FEX_X87REDUCEDPRECISION=1",
             "FEX_MULTIBLOCK=1",
+            // Proton's own log of every game start (steam-<appid>.log), written straight into this
+            // session's log folder so Share logs carries it. On while games are being brought up:
+            // a launch that fails says why only here.
+            "PROTON_LOG=1",
+            "PROTON_LOG_DIR=" + logs.path,
             // Controllers: libfakeinput.so (named in /etc/ld.so.preload) serves the app's rings as
             // /dev/input/eventN, as an Xbox 360 pad Steam and SDL know without configuration.
             "FAKE_EVDEV_DIR=" + fakeInputDir.path,
