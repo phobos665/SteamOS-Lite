@@ -66,6 +66,9 @@ android {
         jniLibs { useLegacyPackaging = true }
     }
 
+    // ResumableDownload logs through android.util.Log, which the JVM tests do not need to see.
+    testOptions { unitTests.isReturnDefaultValues = true }
+
     lint {
         abortOnError = false
         checkReleaseBuilds = false

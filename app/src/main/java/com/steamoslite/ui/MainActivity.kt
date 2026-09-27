@@ -39,6 +39,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -60,6 +61,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.steamoslite.games.InstalledGame
 import com.steamoslite.games.SteamLibrary
+import com.steamoslite.runtime.InstallService
+import com.steamoslite.runtime.InstallStatus
 import com.steamoslite.runtime.RuntimeInstaller
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -106,7 +109,8 @@ internal fun AppTheme(content: @Composable () -> Unit) {
 
 internal sealed interface RuntimeState {
     data object Checking : RuntimeState
-    data class Missing(val release: RuntimeInstaller.Release?) : RuntimeState
+    /** [partialBytes]: how much of [release] an earlier, interrupted download left on disk. */
+    data class Missing(val release: RuntimeInstaller.Release?, val partialBytes: Long = 0) : RuntimeState
     data class Installing(val stage: String, val percent: Int) : RuntimeState
     data class Failed(val message: String) : RuntimeState
     data class Ready(val version: String, val update: RuntimeInstaller.Release?) : RuntimeState
@@ -123,36 +127,45 @@ private fun Home(resumeCount: Int, onLaunch: (String?) -> Unit) {
         val installed = withContext(Dispatchers.IO) { RuntimeInstaller.installedVersion(context) }
         state = if (installed != null) RuntimeState.Ready(installed, null) else RuntimeState.Missing(null)
         val release = withContext(Dispatchers.IO) { RuntimeInstaller.fetchRelease() }
+        val partial = release?.let { withContext(Dispatchers.IO) { RuntimeInstaller.partialBytes(context, it) } } ?: 0L
         state = when {
-            installed == null -> RuntimeState.Missing(release)
+            installed == null -> RuntimeState.Missing(release, partial)
             release != null && release.version != installed -> RuntimeState.Ready(installed, release)
             else -> RuntimeState.Ready(installed, null)
         }
     }
 
-    fun install(release: RuntimeInstaller.Release) {
-        scope.launch {
-            state = RuntimeState.Installing("Downloading", 0)
-            val ok = withContext(Dispatchers.IO) {
-                RuntimeInstaller.install(context, release) { stage, percent ->
-                    scope.launch(Dispatchers.Main) { state = RuntimeState.Installing(stage, percent) }
-                }
-            }
-            if (ok) refresh() else state = RuntimeState.Failed("The install did not finish. Check the connection and free space, then try again.")
+    // The install itself runs in InstallService, so it carries on while the app is in the
+    // background; this screen only mirrors it.
+    val install by InstallService.status.collectAsState()
+    LaunchedEffect(install) {
+        when (install) {
+            // Acknowledging turns it back to Idle, which refreshes below.
+            is InstallStatus.Done -> InstallService.acknowledge()
+            // On first show, and after an install finished or was cancelled: re-read what is on disk.
+            is InstallStatus.Idle -> refresh()
+            else -> {}
         }
     }
-
-    LaunchedEffect(Unit) { refresh() }
     val ready = state is RuntimeState.Ready
     val games by produceState(initialValue = emptyList<InstalledGame>(), resumeCount, ready) {
         if (ready) value = withContext(Dispatchers.IO) { SteamLibrary.installedGames(context) }
     }
 
+    val shown = when (val i = install) {
+        is InstallStatus.Running -> RuntimeState.Installing(i.stage, i.percent)
+        is InstallStatus.Failed -> RuntimeState.Failed(i.message)
+        else -> state
+    }
     HomeScreen(
-        state = state,
+        state = shown,
         games = games,
-        onInstall = ::install,
-        onRetry = { scope.launch { refresh() } },
+        onInstall = { InstallService.start(context, it) },
+        onCancel = { InstallService.cancel(context) },
+        onRetry = {
+            InstallService.acknowledge()
+            scope.launch { refresh() }
+        },
         onLaunch = onLaunch,
     )
 }
@@ -163,6 +176,7 @@ internal fun HomeScreen(
     state: RuntimeState,
     games: List<InstalledGame>,
     onInstall: (RuntimeInstaller.Release) -> Unit,
+    onCancel: () -> Unit,
     onRetry: () -> Unit,
     onLaunch: (String?) -> Unit,
     coverOf: @Composable (InstalledGame) -> Bitmap? = { loadCover(it) },
@@ -172,8 +186,8 @@ internal fun HomeScreen(
         Spacer(Modifier.height(16.dp))
         when (state) {
             RuntimeState.Checking -> Text("Checking…", color = Color.Gray)
-            is RuntimeState.Missing -> Setup(state.release, onInstall)
-            is RuntimeState.Installing -> Progress(state)
+            is RuntimeState.Missing -> Setup(state.release, state.partialBytes, onInstall)
+            is RuntimeState.Installing -> Progress(state, onCancel)
             is RuntimeState.Failed -> {
                 Text(state.message, color = Color(0xFFFF8080))
                 Spacer(Modifier.height(12.dp))
@@ -185,7 +199,7 @@ internal fun HomeScreen(
 }
 
 @Composable
-private fun Setup(release: RuntimeInstaller.Release?, onInstall: (RuntimeInstaller.Release) -> Unit) {
+private fun Setup(release: RuntimeInstaller.Release?, partialBytes: Long, onInstall: (RuntimeInstaller.Release) -> Unit) {
     Text(
         "SteamOS needs its runtime: a Linux system with gamescope that runs Valve's own Steam client. " +
             "It is downloaded once" + (release?.let { " (${it.size / 1_000_000} MB)" } ?: "") +
@@ -194,15 +208,22 @@ private fun Setup(release: RuntimeInstaller.Release?, onInstall: (RuntimeInstall
     )
     Spacer(Modifier.height(16.dp))
     if (release == null) Text("Looking up the latest runtime…", color = Color.Gray)
+    else if (partialBytes > 0) FocusedButton(
+        "Resume download (${partialBytes / 1_000_000} of ${release.size / 1_000_000} MB)", requestFocus = true,
+    ) { onInstall(release) }
     else FocusedButton("Install runtime ${release.version}", requestFocus = true) { onInstall(release) }
 }
 
 @Composable
-private fun Progress(s: RuntimeState.Installing) {
+private fun Progress(s: RuntimeState.Installing, onCancel: () -> Unit) {
     Text(if (s.percent >= 0) "${s.stage} ${s.percent}%" else "${s.stage}…", color = Color.White)
     Spacer(Modifier.height(12.dp))
     if (s.percent >= 0) LinearProgressIndicator(progress = { s.percent / 100f }, modifier = Modifier.fillMaxWidth())
     else LinearProgressIndicator(Modifier.fillMaxWidth())
+    Spacer(Modifier.height(12.dp))
+    Text("You can leave the app: the install carries on in the background.", color = Color.Gray)
+    Spacer(Modifier.height(16.dp))
+    OutlinedButton(onClick = onCancel) { Text("Cancel") }
 }
 
 @Composable

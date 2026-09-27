@@ -67,6 +67,9 @@ jobs:
       - name: Build
         run: ./gradlew assembleDebug --no-daemon
 
+      - name: Unit tests
+        run: ./gradlew testDebugUnitTest --tests 'com.steamoslite.util.*' --no-daemon
+
       # A session needs every one of these; a missing one only shows up on a device, as a black
       # screen or a silent failure. Also checks the compositor's JNI names match the Java class.
       - name: Check the APK

@@ -63,6 +63,7 @@ class Screenshots {
                 state = state,
                 games = if (withGames) games.map { it.first } else emptyList(),
                 onInstall = {},
+                onCancel = {},
                 onRetry = {},
                 onLaunch = {},
                 coverOf = { covers[it.appId] },
@@ -73,6 +74,10 @@ class Screenshots {
     @Test fun setup() = home(RuntimeState.Missing(release))
 
     @Test fun installing() = home(RuntimeState.Installing("Downloading", 42))
+
+    @Test fun installing_retrying() = home(RuntimeState.Installing("Connection problem, retrying in 8 s (attempt 3)", 42))
+
+    @Test fun setup_resume() = home(RuntimeState.Missing(release, 331_000_000L))
 
     @Test fun library() = home(RuntimeState.Ready("r9", null))
 

@@ -5,6 +5,7 @@ import android.util.Log;
 
 import com.steamoslite.util.Downloader;
 import com.steamoslite.util.FileUtils;
+import com.steamoslite.util.ResumableDownload;
 
 import org.apache.commons.compress.archivers.tar.TarArchiveEntry;
 import org.apache.commons.compress.archivers.tar.TarArchiveInputStream;
@@ -23,6 +24,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.StandardCopyOption;
 import java.security.MessageDigest;
+import java.util.function.BooleanSupplier;
 
 /**
  * Downloads and unpacks the Linux runtime rootfs into {@code files/linuxfs}. Nothing fetches it
@@ -97,86 +99,125 @@ public final class RuntimeInstaller {
      */
     private static final String USER_DATA = "root";
 
+    /** Where downloads wait until they are installed: app storage, which Android never clears on its own. */
+    private static File downloadDir(Context context) {
+        return new File(context.getFilesDir(), "downloads");
+    }
+
+    /** The archive for one release. Named by its checksum, so a partial is only ever resumed into the same file. */
+    private static File archiveFor(Context context, Release release) {
+        String tag = release.sha256.length() >= 16 ? release.sha256.substring(0, 16) : release.version;
+        return new File(downloadDir(context), "linuxfs-" + tag + ".tar.zst");
+    }
+
+    /** Bytes of {@code release} already on disk from an earlier attempt, 0 when none. */
+    public static long partialBytes(Context context, Release release) {
+        File archive = archiveFor(context, release);
+        return archive.isFile() ? archive.length() : 0L;
+    }
+
     /**
-     * Downloads {@code release} and replaces whatever is installed with it. Returns false and
-     * leaves the existing runtime alone if the download or the checksum fails; the new rootfs is
-     * only moved into place once it has been unpacked whole.
+     * Downloads {@code release} and replaces whatever is installed with it. Throws with a message a
+     * user can act on when it cannot, leaving the existing runtime alone; the new rootfs is only moved
+     * into place once it has been unpacked whole.
+     *
+     * <p>The download resumes: a failed connection is retried with backoff from the last byte on
+     * disk, and the partial file outlives a failure or the process being killed, so calling this
+     * again carries on where the last attempt stopped. It is deleted only once the install succeeds,
+     * or if its checksum proves it wrong.
      *
      * <p>{@link #USER_DATA} survives the swap: the system is replaced, what the user put in it is
      * not. An update therefore keeps Steam, the login and the installed games.
      */
-    public static boolean install(Context context, Release release, ProgressListener listener) {
-        File archive = new File(context.getCacheDir(), "linuxfs.tar.zst");
-        try {
-            if (listener != null) listener.onProgress("Downloading", 0);
-            // Downloader reports a 0..1 fraction, or -1 while the total size is unknown.
-            boolean ok = Downloader.downloadFile(release.url, archive, true, (fraction) -> {
-                if (listener != null) {
-                    listener.onProgress("Downloading",
-                            fraction < 0 ? -1 : Math.round(fraction * 100f));
-                }
-            });
-            if (!ok) {
-                Log.w(TAG, "download failed");
-                return false;
-            }
-
-            if (listener != null) listener.onProgress("Verifying", -1);
-            String actual = sha256(archive);
-            if (!release.sha256.equalsIgnoreCase(actual)) {
-                Log.w(TAG, "checksum mismatch: wanted " + release.sha256 + ", got " + actual);
-                return false;
-            }
-
-            // Unpack beside the live rootfs and swap, so a failure here cannot leave a half
-            // runtime that isInstalled() would happily launch.
-            File root = LinuxRuntime.rootDir(context);
-            File staging = new File(root.getParentFile(), LinuxRuntime.DIR + ".new");
-            FileUtils.delete(staging);
-            if (!staging.mkdirs()) return false;
-            if (listener != null) listener.onProgress("Extracting", -1);
-            if (!extract(archive, staging, listener)) {
-                FileUtils.delete(staging);
-                return false;
-            }
-            FileUtils.writeString(new File(staging, VERSION_FILE), release.version);
-
-            File old = new File(root.getParentFile(), LinuxRuntime.DIR + ".old");
-            FileUtils.delete(old);
-            if (root.isDirectory() && !root.renameTo(old)) {
-                FileUtils.delete(staging);
-                return false;
-            }
-
-            // Carry the user's home over before the new rootfs takes the name. A rename inside the
-            // same filesystem, so a 30 GB library costs nothing and cannot half-copy; the tarball's
-            // own empty /root is dropped first so the rename has somewhere to land. If this fails
-            // the update is abandoned and the previous runtime is put back untouched - shipping a
-            // working system with the user's games gone is the worse outcome.
-            File keptFrom = new File(old, USER_DATA);
-            if (keptFrom.isDirectory()) {
-                File keptTo = new File(staging, USER_DATA);
-                FileUtils.delete(keptTo);
-                if (!keptFrom.renameTo(keptTo)) {
-                    Log.w(TAG, "could not carry " + USER_DATA + " across the update; rolling back");
-                    FileUtils.delete(staging);
-                    old.renameTo(root);
-                    return false;
-                }
-            }
-
-            if (!staging.renameTo(root)) {
-                if (old.isDirectory()) old.renameTo(root);
-                return false;
-            }
-            FileUtils.delete(old);
-            return LinuxRuntime.isInstalled(context);
-        } catch (Exception e) {
-            Log.e(TAG, "install", e);
-            return false;
-        } finally {
-            archive.delete();
+    public static void install(Context context, Release release, ProgressListener listener,
+                               BooleanSupplier cancelled) throws IOException {
+        File archive = archiveFor(context, release);
+        // Partials of other releases are dead weight: a release is only ever resumed into its own file.
+        File[] stale = downloadDir(context).listFiles();
+        if (stale != null) {
+            for (File f : stale) if (!f.equals(archive)) FileUtils.delete(f);
         }
+
+        final int[] lastPercent = {0};
+        ResumableDownload download = new ResumableDownload(release.url, archive, release.size, 8);
+        boolean ok = download.run(new ResumableDownload.Listener() {
+            @Override
+            public void onProgress(long done, long total) {
+                int percent = total > 0 ? (int) (done * 100 / total) : -1;
+                lastPercent[0] = percent;
+                listener.onProgress("Downloading", percent);
+            }
+
+            @Override
+            public void onRetry(int attempt, long delayMs, String reason) {
+                listener.onProgress("Connection problem, retrying in " + Math.max(1, delayMs / 1000)
+                        + " s (attempt " + attempt + ")", lastPercent[0]);
+            }
+        }, cancelled::getAsBoolean);
+        if (!ok) {
+            throw new IOException("The download kept failing. It will continue from "
+                    + (archive.length() / 1_000_000) + " MB when you try again.");
+        }
+
+        listener.onProgress("Verifying", -1);
+        String actual;
+        try {
+            actual = sha256(archive);
+        } catch (Exception e) {
+            throw new IOException("Could not read the download: " + e.getMessage(), e);
+        }
+        if (!release.sha256.equalsIgnoreCase(actual)) {
+            Log.w(TAG, "checksum mismatch: wanted " + release.sha256 + ", got " + actual);
+            FileUtils.delete(archive);
+            throw new IOException("The download was corrupted and has been discarded. Try again to download it fresh.");
+        }
+
+        // Unpack beside the live rootfs and swap, so a failure here cannot leave a half runtime that
+        // isInstalled() would happily launch. The verified archive stays until this succeeds, so a
+        // failed or interrupted unpack does not cost another download.
+        File root = LinuxRuntime.rootDir(context);
+        File staging = new File(root.getParentFile(), LinuxRuntime.DIR + ".new");
+        FileUtils.delete(staging);
+        if (!staging.mkdirs()) throw new IOException("Could not create " + staging);
+        listener.onProgress("Extracting", -1);
+        if (!extract(archive, staging, listener, cancelled)) {
+            FileUtils.delete(staging);
+            if (cancelled.getAsBoolean()) throw new ResumableDownload.Cancelled();
+            throw new IOException("Unpacking the runtime failed. Check there is at least 3 GB free, then try again.");
+        }
+        FileUtils.writeString(new File(staging, VERSION_FILE), release.version);
+
+        File old = new File(root.getParentFile(), LinuxRuntime.DIR + ".old");
+        FileUtils.delete(old);
+        if (root.isDirectory() && !root.renameTo(old)) {
+            FileUtils.delete(staging);
+            throw new IOException("Could not move the old runtime aside.");
+        }
+
+        // Carry the user's home over before the new rootfs takes the name. A rename inside the
+        // same filesystem, so a 30 GB library costs nothing and cannot half-copy; the tarball's
+        // own empty /root is dropped first so the rename has somewhere to land. If this fails
+        // the update is abandoned and the previous runtime is put back untouched - shipping a
+        // working system with the user's games gone is the worse outcome.
+        File keptFrom = new File(old, USER_DATA);
+        if (keptFrom.isDirectory()) {
+            File keptTo = new File(staging, USER_DATA);
+            FileUtils.delete(keptTo);
+            if (!keptFrom.renameTo(keptTo)) {
+                Log.w(TAG, "could not carry " + USER_DATA + " across the update; rolling back");
+                FileUtils.delete(staging);
+                old.renameTo(root);
+                throw new IOException("Could not carry Steam and your games over; the old runtime was kept.");
+            }
+        }
+
+        if (!staging.renameTo(root)) {
+            if (old.isDirectory()) old.renameTo(root);
+            throw new IOException("Could not move the new runtime into place.");
+        }
+        FileUtils.delete(old);
+        FileUtils.delete(archive);
+        if (!LinuxRuntime.isInstalled(context)) throw new IOException("The runtime unpacked but is incomplete.");
     }
 
     public static void uninstall(Context context) {
@@ -189,7 +230,8 @@ public final class RuntimeInstaller {
      * empty file instead of its link target is a rootfs that boots to nothing. Symlinks, hard
      * links and the executable bit are all carried over here.
      */
-    private static boolean extract(File archive, File destination, ProgressListener listener) {
+    private static boolean extract(File archive, File destination, ProgressListener listener,
+                                   BooleanSupplier cancelled) {
         long entries = 0;
         try (InputStream in = new ZstdCompressorInputStream(
                 new BufferedInputStream(new FileInputStream(archive), 1 << 16));
@@ -197,6 +239,7 @@ public final class RuntimeInstaller {
             TarArchiveEntry entry;
             String base = destination.getCanonicalPath() + File.separator;
             while ((entry = tar.getNextTarEntry()) != null) {
+                if (cancelled.getAsBoolean()) return false;
                 File file = new File(destination, entry.getName());
                 // Refuse anything that would land outside the runtime directory.
                 if (!(file.getCanonicalPath() + (entry.isDirectory() ? File.separator : "")).startsWith(base)
