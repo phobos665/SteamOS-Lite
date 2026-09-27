@@ -23,6 +23,8 @@ class ResumableDownload @JvmOverloads constructor(
     /** The complete size, when known (the catalog states it); 0 = trust the server. */
     private val expectedSize: Long,
     private val maxFailures: Int = 8,
+    /** Where failures are reported; replaceable so the JVM tests need no android.util.Log. */
+    private val log: (String) -> Unit = { Log.w(TAG, it) },
     /** Wait before retry N (1-based). Replaceable so tests need not sleep for real. */
     private val backoff: (Int) -> Long = { defaultBackoff(it) },
 ) {
@@ -44,7 +46,7 @@ class ResumableDownload @JvmOverloads constructor(
             val before = if (file.exists()) file.length() else 0L
             if (expectedSize > 0 && before == expectedSize) return true
             if (expectedSize > 0 && before > expectedSize) {
-                Log.w(TAG, "partial file is larger than the release ($before > $expectedSize); starting over")
+                log("partial file is larger than the release ($before > $expectedSize); starting over")
                 file.delete()
                 continue
             }
@@ -57,11 +59,11 @@ class ResumableDownload @JvmOverloads constructor(
                 val after = if (file.exists()) file.length() else 0L
                 failures = if (after > before) 1 else failures + 1
                 if (failures > maxFailures) {
-                    Log.w(TAG, "giving up after $maxFailures failures without progress", e)
+                    log("giving up after $maxFailures failures without progress: ${e.message}")
                     return false
                 }
                 val delay = backoff(failures)
-                Log.w(TAG, "download failed at $after bytes (${e.message}); retry $failures in ${delay}ms")
+                log("download failed at $after bytes (${e.message}); retry $failures in ${delay}ms")
                 listener.onRetry(failures, delay, e.message ?: e.javaClass.simpleName)
                 sleep(delay, cancelled)
             }

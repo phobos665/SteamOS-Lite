@@ -92,7 +92,7 @@ class ResumableDownloadTest {
     }
 
     private fun download(file: File, maxFailures: Int = 8) =
-        ResumableDownload(url, file, data.size.toLong(), maxFailures) { 1L }
+        ResumableDownload(url, file, data.size.toLong(), maxFailures, log = {}) { 1L }
 
     @Test
     fun resumesAfterDroppedConnections() {
