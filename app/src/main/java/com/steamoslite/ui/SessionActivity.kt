@@ -1,7 +1,6 @@
 package com.steamoslite.ui
 
 import android.app.Activity
-import android.app.AlertDialog
 import android.graphics.Color
 import android.hardware.input.InputManager
 import android.os.Bundle
@@ -39,6 +38,8 @@ import kotlin.concurrent.thread
 class SessionActivity : Activity() {
     private lateinit var surface: SurfaceView
     private lateinit var status: TextView
+    private lateinit var keyboard: KeyboardBridge
+    private lateinit var quickMenu: QuickMenu
     private lateinit var controllers: Controllers
     private var session: Session? = null
     private var compositorStarted = false
@@ -62,14 +63,26 @@ class SessionActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        // The keyboard slides over the picture; resizing the surface would resize gamescope's output.
+        window.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_NOTHING)
         pickHighestRefreshMode()
 
         surface = SurfaceView(this)
         status = loadingView(this)
+        keyboard = KeyboardBridge(this)
+        quickMenu = QuickMenu(this).apply {
+            setItems("SteamOS", listOf(
+                QuickMenu.Item({ if (keyboard.keyboardVisible) "Hide keyboard" else "Show keyboard" }) { toggleKeyboard() },
+                QuickMenu.Item({ "Exit SteamOS" }) { finishSession(null) },
+                QuickMenu.Item({ "Close menu" }) {},
+            ))
+        }
         setContentView(FrameLayout(this).apply {
             setBackgroundColor(Color.BLACK)
             addView(surface, FrameLayout.LayoutParams(-1, -1))
+            addView(keyboard, FrameLayout.LayoutParams(1, 1))
             addView(status, FrameLayout.LayoutParams(-1, -1))
+            addView(quickMenu, FrameLayout.LayoutParams(-1, -1))
         })
         hideSystemBars()
 
@@ -267,14 +280,27 @@ class SessionActivity : Activity() {
         return true
     }
 
-    override fun dispatchGenericMotionEvent(event: MotionEvent): Boolean =
-        controllers.onMotionEvent(event) || super.dispatchGenericMotionEvent(event)
+    override fun dispatchGenericMotionEvent(event: MotionEvent): Boolean {
+        // While the menu is open the stick moves its focus (Android turns it into D-pad presses).
+        if (quickMenu.isOpen) return super.dispatchGenericMotionEvent(event)
+        return controllers.onMotionEvent(event) || super.dispatchGenericMotionEvent(event)
+    }
 
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
-        if (controllers.onKeyEvent(event)) return true
         val code = event.keyCode
+        if (quickMenu.isOpen) {
+            if (code == KeyEvent.KEYCODE_BACK) {
+                if (event.action == KeyEvent.ACTION_UP) quickMenu.close()
+                return true
+            }
+            if (quickMenu.onPadKey(event)) return true
+            return super.dispatchKeyEvent(event)
+        }
+        if (controllers.onKeyEvent(event)) return true
+        // Back (the system gesture, or a handheld's back button) opens the quick menu. While the
+        // Android keyboard is up, back reaches the keyboard first and closes it instead.
         if (code == KeyEvent.KEYCODE_BACK) {
-            if (event.action == KeyEvent.ACTION_UP) confirmExit()
+            if (event.action == KeyEvent.ACTION_UP) quickMenu.open()
             return true
         }
         if (code == KeyEvent.KEYCODE_VOLUME_UP || code == KeyEvent.KEYCODE_VOLUME_DOWN ||
@@ -292,13 +318,8 @@ class SessionActivity : Activity() {
         return super.dispatchKeyEvent(event)
     }
 
-    private fun confirmExit() {
-        AlertDialog.Builder(this)
-            .setTitle("Leave SteamOS?")
-            .setMessage("Steam and any running game will be closed.")
-            .setPositiveButton("Leave") { _, _ -> finishSession(null) }
-            .setNegativeButton("Stay", null)
-            .show()
+    private fun toggleKeyboard() {
+        if (keyboard.keyboardVisible) keyboard.hide() else keyboard.show()
     }
 
     // ---- Lifecycle

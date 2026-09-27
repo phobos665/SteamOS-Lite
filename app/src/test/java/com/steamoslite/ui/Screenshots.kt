@@ -95,6 +95,20 @@ class Screenshots {
         },
     )
 
+    @Test fun session_quick_menu() = paparazzi.snapshot(
+        android.widget.FrameLayout(paparazzi.context).apply {
+            setBackgroundColor(0xFF203040.toInt())
+            addView(QuickMenu(paparazzi.context).apply {
+                setItems("SteamOS", listOf(
+                    QuickMenu.Item({ "Show keyboard" }) {},
+                    QuickMenu.Item({ "Exit SteamOS" }) {},
+                    QuickMenu.Item({ "Close menu" }) {},
+                ))
+                open()
+            })
+        },
+    )
+
     /** A stand-in capsule: a gradient with the title on it, 600x900 like Steam's. */
     private fun fakeCover(title: String, color: Int): Bitmap {
         val bitmap = Bitmap.createBitmap(600, 900, Bitmap.Config.ARGB_8888)
