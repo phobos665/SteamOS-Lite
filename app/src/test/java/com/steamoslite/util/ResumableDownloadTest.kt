@@ -1,6 +1,5 @@
 package com.steamoslite.util
 
-import com.sun.net.httpserver.HttpServer
 import org.junit.After
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
@@ -9,9 +8,13 @@ import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 import java.io.File
-import java.net.InetSocketAddress
+import java.io.IOException
+import java.net.InetAddress
+import java.net.ServerSocket
+import java.net.Socket
 import java.nio.file.Files
 import java.util.concurrent.CopyOnWriteArrayList
+import kotlin.concurrent.thread
 import kotlin.random.Random
 
 /**
@@ -20,7 +23,7 @@ import kotlin.random.Random
  */
 class ResumableDownloadTest {
     private val data = Random(7).nextBytes(1_000_000)
-    private lateinit var server: HttpServer
+    private lateinit var server: ServerSocket
     private lateinit var dir: File
 
     /** Range headers the server saw, one per request ("" for none). */
@@ -33,44 +36,54 @@ class ResumableDownloadTest {
     @Before
     fun setUp() {
         dir = Files.createTempDirectory("dl").toFile()
-        server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
-        server.createContext("/file") { ex ->
-            val range = ex.requestHeaders.getFirst("Range").orEmpty()
-            ranges += range
-            if (alwaysFail) {
-                ex.sendResponseHeaders(503, -1)
-                ex.close()
-                return@createContext
-            }
-            val start = if (honourRange && range.startsWith("bytes=")) range.removePrefix("bytes=").removeSuffix("-").toInt() else 0
-            val body = data.copyOfRange(start, data.size)
-            if (start > 0) ex.responseHeaders.add("Content-Range", "bytes $start-${data.size - 1}/${data.size}")
-            ex.sendResponseHeaders(if (start > 0) 206 else 200, body.size.toLong())
-            val cut = cutAfter.firstOrNull()?.also { cutAfter.removeAt(0) }
-            try {
-                if (cut != null) {
-                    ex.responseBody.write(body, 0, minOf(cut, body.size))
-                    ex.responseBody.flush()
-                    // Close short of the declared length: the client sees the connection drop
-                    // mid-body, as it would when the signal goes.
-                    throw java.io.IOException("cut")
-                }
-                ex.responseBody.write(body)
-            } catch (_: java.io.IOException) {
-            } finally {
-                ex.close()
+        server = ServerSocket(0, 50, InetAddress.getByName("127.0.0.1"))
+        thread(isDaemon = true) {
+            while (!server.isClosed) {
+                val socket = try { server.accept() } catch (_: IOException) { break }
+                thread(isDaemon = true) { socket.use { serve(it) } }
             }
         }
-        server.start()
+    }
+
+    /** Just enough HTTP/1.1: one GET per connection, an optional Range, then close. */
+    private fun serve(socket: Socket) {
+        val reader = socket.getInputStream().bufferedReader()
+        reader.readLine() ?: return
+        var range = ""
+        while (true) {
+            val line = reader.readLine() ?: return
+            if (line.isEmpty()) break
+            if (line.startsWith("Range:", ignoreCase = true)) range = line.substringAfter(':').trim()
+        }
+        ranges += range
+        val out = socket.getOutputStream()
+        if (alwaysFail) {
+            out.write("HTTP/1.1 503 Unavailable\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".toByteArray())
+            out.flush()
+            return
+        }
+        val start = if (honourRange && range.startsWith("bytes=")) range.removePrefix("bytes=").removeSuffix("-").toInt() else 0
+        val body = data.copyOfRange(start, data.size)
+        val head = StringBuilder()
+        head.append(if (start > 0) "HTTP/1.1 206 Partial Content\r\n" else "HTTP/1.1 200 OK\r\n")
+        head.append("Content-Length: ${body.size}\r\n")
+        if (start > 0) head.append("Content-Range: bytes $start-${data.size - 1}/${data.size}\r\n")
+        head.append("Connection: close\r\n\r\n")
+        out.write(head.toString().toByteArray())
+        // A cut connection sends part of the body and closes: the client sees it drop mid-body,
+        // as it would when the signal goes.
+        val cut = cutAfter.firstOrNull()?.also { cutAfter.removeAt(0) }
+        out.write(body, 0, if (cut != null) minOf(cut, body.size) else body.size)
+        out.flush()
     }
 
     @After
     fun tearDown() {
-        server.stop(0)
+        server.close()
         dir.deleteRecursively()
     }
 
-    private val url get() = "http://127.0.0.1:${server.address.port}/file"
+    private val url get() = "http://127.0.0.1:${server.localPort}/file"
 
     private class Recorder : ResumableDownload.Listener {
         val retries = CopyOnWriteArrayList<Int>()
