@@ -50,9 +50,12 @@ class Screenshots {
         "Velvet Circuit" to 0xFF4A5568.toInt(),
     ).mapIndexed { i, (name, color) -> Triple(InstalledGame((1000 + i).toString(), name, null), name, color) }
 
-    private val covers: Map<String, Bitmap> = games.mapNotNull { (game, name, color) ->
-        color?.let { game.appId to fakeCover(name, it) }
-    }.toMap()
+    // Lazy: android.graphics only works once the Paparazzi rule has started layoutlib.
+    private val covers: Map<String, Bitmap> by lazy {
+        games.mapNotNull { (game, name, color) ->
+            color?.let { game.appId to fakeCover(name, it) }
+        }.toMap()
+    }
 
     private fun home(state: RuntimeState, withGames: Boolean = true) = paparazzi.snapshot {
         AppTheme {
