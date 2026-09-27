@@ -57,7 +57,7 @@ class Controllers(context: Context, private val fakeInputDir: File) {
 
     /** A pad was unplugged: Steam sees it removed. */
     fun onDeviceRemoved() {
-        val present = InputDevice.getDeviceIds().mapNotNull { InputDevice.getDevice(it)?.descriptor }.toSet()
+        val present = InputDevice.getDeviceIds().asList().mapNotNull { InputDevice.getDevice(it)?.descriptor }.toSet()
         val gone = slotByDescriptor.filterKeys { it !in present }
         for ((descriptor, slot) in gone) {
             slotByDescriptor.remove(descriptor)

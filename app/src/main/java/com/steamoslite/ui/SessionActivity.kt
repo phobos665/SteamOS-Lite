@@ -104,10 +104,7 @@ class SessionActivity : Activity() {
         // The compositor sends this keymap to wl_keyboard clients so they can read our evdev codes.
         assets.open("wayland/keymap.xkb").use { i -> File(runtimeDir, "keymap.xkb").outputStream().use { i.copyTo(it) } }
         val driver = bundledDriver()
-        WaylandCompositor.setFirstFrameListener {
-            firstFrame = true
-            main.post { status.visibility = View.GONE }
-        }
+        WaylandCompositor.setFirstFrameListener { firstFrame = true }
         WaylandCompositor.nativeSetOutputRefreshRate(refreshHz().toFloat())
         WaylandCompositor.nativeSetOutputSize(OUTPUT_WIDTH, OUTPUT_HEIGHT)
         WaylandCompositor.nativeStartWithSurface(
@@ -140,13 +137,21 @@ class SessionActivity : Activity() {
 
     /**
      * Mirrors the session script's "== STEP" milestones onto the loading screen. A first run
-     * downloads the Steam client before anything is drawn - a minute or two of black screen that
-     * otherwise reads as a hang.
+     * downloads the Steam client before anything is drawn - a minute or two that otherwise reads as
+     * a hang. gamescope presents a black frame long before that, so the first frame alone does not
+     * end the loading screen: it goes once the client is starting and something has been drawn (or,
+     * should the first-frame signal never come, a while after the client started).
      */
     private fun watchProgress(log: File) {
         var offset = 0L
-        while (!firstFrame && !ending) {
+        var clientStartedAt = 0L
+        while (!ending) {
             Thread.sleep(1000)
+            val now = System.currentTimeMillis()
+            if (clientStartedAt > 0 && ((firstFrame && now - clientStartedAt >= 3000) || now - clientStartedAt >= 30000)) {
+                main.post { status.visibility = View.GONE }
+                return
+            }
             if (!log.isFile || log.length() == offset) continue
             try {
                 RandomAccessFile(log, "r").use { raf ->
@@ -159,7 +164,10 @@ class SessionActivity : Activity() {
                         val at = line.indexOf("== STEP ")
                         if (at < 0) null else line.substring(at + 8).substringAfter(' ').trim()
                     }.lastOrNull()
-                    if (step != null) main.post { if (!firstFrame) status.text = "Starting SteamOS…\n\n$step" }
+                    if (step != null) {
+                        if (clientStartedAt == 0L && step.startsWith("starting the Steam client")) clientStartedAt = now
+                        main.post { status.text = "Starting SteamOS…\n\n$step" }
+                    }
                 }
             } catch (_: Exception) {}
         }
