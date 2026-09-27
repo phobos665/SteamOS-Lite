@@ -51,7 +51,10 @@ class Session(
         FileUtils.clear(File(context.cacheDir, "shm"))
 
         val runtimeDir = xdgRuntimeDir(context).apply { mkdirs() }
-        val logs = openLogDir().also { logDir = it }
+        val logs = openLogDir(context).also { logDir = it }
+        // This process's Android log: the compositor, adrenotools and Vulkan report there, and its
+        // earlier lines (the compositor starts before the session) are in the buffer already.
+        startAppLog(File(logs, "app.log"))
         val fakeInputDir = fakeInputDir(context).apply { mkdirs() }
         FakeInputWriter.prepareRingSlots(fakeInputDir, 4)
 
@@ -137,6 +140,54 @@ class Session(
     private fun stopServices() {
         network.stop()
         pulse.stop()
+        logDir?.let { collectLogs(it) }
+        stopAppLog()
+    }
+
+    private var appLog: Process? = null
+    private val sessionStart = System.currentTimeMillis()
+
+    private fun startAppLog(target: File) {
+        try {
+            appLog = ProcessBuilder("/system/bin/logcat", "-v", "threadtime", "--pid=" + android.os.Process.myPid())
+                .redirectErrorStream(true)
+                .redirectOutput(ProcessBuilder.Redirect.appendTo(target))
+                .start()
+        } catch (e: Exception) {
+            Log.w(TAG, "could not start the app log", e)
+        }
+    }
+
+    private fun stopAppLog() {
+        appLog?.destroy()
+        appLog = null
+    }
+
+    /**
+     * What is only worth reading once the session is over: the audio daemon's log, the compositor's
+     * own session log, and Steam's logs - reduced to their tails, and without connection_log.txt,
+     * which carries the account's session token.
+     */
+    @Synchronized
+    private fun collectLogs(dir: File) {
+        if (File(dir, ".collected").exists()) return
+        try {
+            File(PulseAudio.workingDir(context), "pulse.log").takeIf { it.isFile }?.copyTo(File(dir, "audio.log"), true)
+            val wayland = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), "Wayland-logs")
+            wayland.listFiles()?.filter { it.isFile && it.lastModified() >= sessionStart }?.forEach {
+                it.copyTo(File(dir, "compositor-" + it.name), true)
+            }
+            val steamLogs = File(root, "root/.local/share/Steam/logs")
+            val out = File(dir, "steam")
+            steamLogs.listFiles()?.filter { it.isFile && it.name != "connection_log.txt" }?.forEach { src ->
+                out.mkdirs()
+                val lines = src.readLines()
+                File(out, src.name).writeText(lines.takeLast(3000).joinToString("\n", postfix = "\n"))
+            }
+            File(dir, ".collected").createNewFile()
+        } catch (e: Exception) {
+            Log.w(TAG, "could not collect the session's logs", e)
+        }
     }
 
     /**
@@ -166,18 +217,27 @@ class Session(
         if (!staged.renameTo(File(etc, "ld.so.preload"))) Log.e(TAG, "could not write ld.so.preload")
     }
 
-    /** Public Downloads when the app may write there, the app's own external dir otherwise. */
-    private fun openLogDir(): File {
-        val stamp = SimpleDateFormat("yyyy-MM-dd_HH-mm-ss", Locale.US).format(Date())
-        val public = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), "SteamOS-Lite/$stamp")
-        if (public.mkdirs() || public.isDirectory) return public
-        val private = File(context.getExternalFilesDir(null), "logs/$stamp")
-        private.mkdirs()
-        return private
-    }
-
     companion object {
         private const val TAG = "Session"
+
+        /** Where session log folders go: public Downloads when the app may write there, else its own dir. */
+        fun logRoots(context: Context): List<File> = listOfNotNull(
+            File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), "SteamOS-Lite"),
+            context.getExternalFilesDir(null)?.let { File(it, "logs") },
+        )
+
+        /** The most recent session's log folder, or null when there has been none. */
+        fun latestLogDir(context: Context): File? =
+            logRoots(context).flatMap { it.listFiles()?.filter(File::isDirectory).orEmpty() }.maxByOrNull { it.lastModified() }
+
+        private fun openLogDir(context: Context): File {
+            val stamp = SimpleDateFormat("yyyy-MM-dd_HH-mm-ss", Locale.US).format(Date())
+            for (root in logRoots(context)) {
+                val dir = File(root, stamp)
+                if (dir.mkdirs() || dir.isDirectory) return dir
+            }
+            return File(context.cacheDir, "logs/$stamp").apply { mkdirs() }
+        }
 
         /** asset under linuxfs/ -> path under the runtime root. */
         private val SESSION_FILES = listOf(

@@ -57,7 +57,7 @@ class Screenshots {
         }.toMap()
     }
 
-    private fun home(state: RuntimeState, withGames: Boolean = true) = paparazzi.snapshot {
+    private fun home(state: RuntimeState, withGames: Boolean = true, shareLogs: Boolean = false) = paparazzi.snapshot {
         AppTheme {
             HomeScreen(
                 state = state,
@@ -66,6 +66,7 @@ class Screenshots {
                 onCancel = {},
                 onRetry = {},
                 onLaunch = {},
+                onShareLogs = if (shareLogs) ({}) else null,
                 coverOf = { covers[it.appId] },
             )
         }
@@ -79,7 +80,7 @@ class Screenshots {
 
     @Test fun setup_resume() = home(RuntimeState.Missing(release, 331_000_000L))
 
-    @Test fun library() = home(RuntimeState.Ready("r9", null))
+    @Test fun library() = home(RuntimeState.Ready("r9", null), shareLogs = true)
 
     @Test fun library_update_available() = home(RuntimeState.Ready("r8", release))
 

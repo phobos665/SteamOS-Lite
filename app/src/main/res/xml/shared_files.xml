@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- What the share sheet may read: the zipped session logs, and nothing else. -->
+<paths>
+    <cache-path name="shared" path="shared/" />
+</paths>

@@ -64,6 +64,7 @@ import com.steamoslite.games.SteamLibrary
 import com.steamoslite.runtime.InstallService
 import com.steamoslite.runtime.InstallStatus
 import com.steamoslite.runtime.RuntimeInstaller
+import com.steamoslite.util.LogShare
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -152,6 +153,9 @@ private fun Home(resumeCount: Int, onLaunch: (String?) -> Unit) {
         if (ready) value = withContext(Dispatchers.IO) { SteamLibrary.installedGames(context) }
     }
 
+    val hasLogs by produceState(initialValue = false, resumeCount) {
+        value = withContext(Dispatchers.IO) { LogShare.hasLogs(context) }
+    }
     val shown = when (val i = install) {
         is InstallStatus.Running -> RuntimeState.Installing(i.stage, i.percent)
         is InstallStatus.Failed -> RuntimeState.Failed(i.message)
@@ -167,6 +171,7 @@ private fun Home(resumeCount: Int, onLaunch: (String?) -> Unit) {
             scope.launch { refresh() }
         },
         onLaunch = onLaunch,
+        onShareLogs = if (hasLogs) ({ LogShare.share(context) }) else null,
     )
 }
 
@@ -179,6 +184,8 @@ internal fun HomeScreen(
     onCancel: () -> Unit,
     onRetry: () -> Unit,
     onLaunch: (String?) -> Unit,
+    /** Shares the last session's logs; null hides the button (no session has run yet). */
+    onShareLogs: (() -> Unit)? = null,
     coverOf: @Composable (InstalledGame) -> Bitmap? = { loadCover(it) },
 ) {
     Column(Modifier.fillMaxSize().padding(24.dp)) {
@@ -193,7 +200,7 @@ internal fun HomeScreen(
                 Spacer(Modifier.height(12.dp))
                 FocusedButton("Try again", onClick = onRetry)
             }
-            is RuntimeState.Ready -> Library(state, games, onLaunch, { state.update?.let(onInstall) }, coverOf)
+            is RuntimeState.Ready -> Library(state, games, onLaunch, { state.update?.let(onInstall) }, onShareLogs, coverOf)
         }
     }
 }
@@ -232,6 +239,7 @@ private fun Library(
     games: List<InstalledGame>,
     onLaunch: (String?) -> Unit,
     onUpdate: () -> Unit,
+    onShareLogs: (() -> Unit)?,
     coverOf: @Composable (InstalledGame) -> Bitmap?,
 ) {
     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -239,6 +247,10 @@ private fun Library(
         if (s.update != null) {
             Spacer(Modifier.width(16.dp))
             OutlinedButton(onClick = onUpdate) { Text("Update runtime to ${s.update.version}") }
+        }
+        if (onShareLogs != null) {
+            Spacer(Modifier.width(16.dp))
+            OutlinedButton(onClick = onShareLogs) { Text("Share logs") }
         }
     }
     Spacer(Modifier.height(24.dp))
