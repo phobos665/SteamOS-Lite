@@ -29,7 +29,7 @@ object TarZstd {
                         entry.isFile -> {
                             file.parentFile?.mkdirs()
                             file.outputStream().use { tar.copyTo(it) }
-                            if (entry.mode and "111".toInt(8) != 0) file.setExecutable(true, false)
+                            if ((entry.mode and "111".toInt(8)) != 0) file.setExecutable(true, false)
                         }
                     }
                 }

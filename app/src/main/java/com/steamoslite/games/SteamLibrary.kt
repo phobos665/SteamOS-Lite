@@ -34,7 +34,7 @@ object SteamLibrary {
         return manifests.mapNotNull { parse(it) }
             .filter { (appId, name, flags) ->
                 appId !in NOT_GAMES && TOOL_PREFIXES.none { name.startsWith(it) } &&
-                    flags and STATE_FULLY_INSTALLED != 0
+                    (flags and STATE_FULLY_INSTALLED) != 0
             }
             .map { (appId, name) -> InstalledGame(appId, name, cover(root, appId)) }
             .sortedBy { it.name.lowercase() }

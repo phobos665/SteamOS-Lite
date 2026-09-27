@@ -100,7 +100,7 @@ class Controllers(context: Context, private val fakeInputDir: File) {
 
     /** True when the event came from a pad and was consumed. */
     fun onMotionEvent(event: MotionEvent): Boolean {
-        if (event.source and InputDevice.SOURCE_JOYSTICK != InputDevice.SOURCE_JOYSTICK) return false
+        if ((event.source and InputDevice.SOURCE_JOYSTICK) != InputDevice.SOURCE_JOYSTICK) return false
         if (event.action != MotionEvent.ACTION_MOVE) return false
         val device = event.device ?: return false
         if (!isGameController(device)) return false
@@ -254,9 +254,9 @@ class Controllers(context: Context, private val fakeInputDir: File) {
             val name = device.name?.lowercase().orEmpty()
             if ("uinput-fpc" in name || "goodix_fp" in name || "uinput-" in name) return false
             val sources = device.sources
-            val gamepad = sources and InputDevice.SOURCE_GAMEPAD == InputDevice.SOURCE_GAMEPAD
-            val joystick = sources and InputDevice.SOURCE_JOYSTICK == InputDevice.SOURCE_JOYSTICK &&
-                sources and InputDevice.SOURCE_MOUSE == 0
+            val gamepad = (sources and InputDevice.SOURCE_GAMEPAD) == InputDevice.SOURCE_GAMEPAD
+            val joystick = (sources and InputDevice.SOURCE_JOYSTICK) == InputDevice.SOURCE_JOYSTICK &&
+                (sources and InputDevice.SOURCE_MOUSE) == 0
             if (!gamepad && !joystick) return false
             val axis = listOf(
                 MotionEvent.AXIS_X, MotionEvent.AXIS_Y, MotionEvent.AXIS_Z, MotionEvent.AXIS_RZ,
