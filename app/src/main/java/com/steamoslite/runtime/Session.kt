@@ -114,6 +114,10 @@ class Session(
         // game (BL_FEXCORE=2605 %command%, or BL_FEXCORE=proton).
         guest += "BL_FEXCORE_ROOT=" + FexCore.prepare(context).path
         guest += "BL_FEXCORE=" + FexCore.selected(context)
+        // DXVK the same way, by running Proton from a mirror of its tree (Proton reinstalls its own
+        // DXVK into the prefix at every start). Per game: BL_DXVK=2.6.1-gplasync %command%.
+        guest += "BL_DXVK_ROOT=" + Dxvk.prepare(context).path
+        guest += "BL_DXVK=" + Dxvk.selected(context)
         LinuxRuntime.vulkanIcd(context)?.let { guest += "VK_ICD_FILENAMES=" + it.path }
         FakeInputWriter.getRingEnv(fakeInputDir).takeIf { it.isNotEmpty() }?.let { guest += "FAKE_EVDEV_MEMFD_PATHS=$it" }
         guest += LinuxRuntime.SESSION_SCRIPT

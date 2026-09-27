@@ -177,6 +177,74 @@ bl_fexcore() {
 }
 """
 
+# DXVK chosen in the app. Proton copies DXVK from its own files/lib/wine/dxvk/ into the game's prefix
+# at every start, so anything swapped into the prefix is overwritten before the game runs. Proton is
+# run instead from a mirror of its tree - symlinks to every entry, except that files/lib/wine/dxvk/
+# holds the chosen version's DLLs - and installs that version itself. Proton takes its base directory
+# from dirname(argv[0]) without resolving it, which is what makes the mirror work. Choosing "Proton's
+# own" again runs the real tree, whose DXVK Proton then copies back. The mirror sits at a fixed path
+# per Proton and is only ever refreshed, never removed: the prefix keeps links into it.
+BL_DXVK_SETUP = """
+bl_mirror() {
+  # $2 becomes a directory of links to every entry of $1 except $3, which the caller fills.
+  mkdir -p "$2" || return 1
+  for l in "$2"/* "$2"/.[!.]*; do
+    [ -L "$l" ] && [ ! -e "$1/${l##*/}" ] && [ ! -L "$1/${l##*/}" ] && rm -f "$l"
+  done
+  for e in "$1"/* "$1"/.[!.]*; do
+    { [ -e "$e" ] || [ -L "$e" ]; } || continue
+    n=${e##*/}
+    [ "$n" = "$3" ] && continue
+    [ -L "$2/$n" ] || [ ! -e "$2/$n" ] || rm -rf "$2/$n"
+    ln -sfn "$e" "$2/$n"
+  done
+}
+bl_dxvk() {
+  base=$1
+  BL_PROTON_BASE=""
+  want=${BL_DXVK:-}
+  [ "$want" = proton ] && want=""
+  [ -n "$want" ] && [ -n "${BL_DXVK_ROOT:-}" ] || return 0
+  pkg="$BL_DXVK_ROOT/$want"
+  real="$base/files/lib/wine/dxvk"
+  if [ ! -f "$pkg/system32/d3d11.dll" ]; then
+    echo "bannerlator-proton: DXVK $want is not installed in the app; using Proton's own" >&2
+    return 0
+  fi
+  if [ ! -d "$real" ]; then
+    echo "bannerlator-proton: this Proton keeps no DXVK in files/lib/wine/dxvk; using its own" >&2
+    return 0
+  fi
+  resolved=$(cd "$base" && pwd -P)
+  key="${resolved##*/}-$(printf '%s' "$resolved" | cksum | cut -d' ' -f1)"
+  shadow="${XDG_DATA_HOME:-$HOME/.local/share}/bannerlator/proton-mirror/$key"
+  bl_mirror "$base" "$shadow" files &&
+    bl_mirror "$base/files" "$shadow/files" lib &&
+    bl_mirror "$base/files/lib" "$shadow/files/lib" wine &&
+    bl_mirror "$base/files/lib/wine" "$shadow/files/lib/wine" dxvk || {
+      echo "bannerlator-proton: could not mirror $base; using Proton's own DXVK" >&2
+      return 0
+    }
+  # Proton's own layout, one directory per architecture, each DLL taken from the package where it
+  # has one (64-bit from system32/, 32-bit from syswow64/) and from Proton otherwise, so Proton
+  # finds every file it copies.
+  d="$shadow/files/lib/wine/dxvk"
+  rm -rf "$d"
+  mkdir -p "$d"
+  for a in "$real"/*; do
+    n=${a##*/}
+    if [ ! -d "$a" ]; then ln -s "$a" "$d/$n"; continue; fi
+    case "$n" in i386-*) from="$pkg/syswow64" ;; *) from="$pkg/system32" ;; esac
+    mkdir -p "$d/$n"
+    for f in "$a"/*; do
+      if [ -f "$from/${f##*/}" ]; then ln -s "$from/${f##*/}" "$d/$n/"; else ln -s "$f" "$d/$n/"; fi
+    done
+  done
+  BL_PROTON_BASE=$shadow
+  echo "bannerlator-proton: DXVK $want (Proton run from $shadow)" >&2
+}
+"""
+
 # Resolves the depot at launch time, so the tool can be registered before the depot exists and
 # survives the client updating or replacing it. Proton takes its base directory from
 # dirname(sys.argv[0]) without resolving it, so it is run from the depot itself.
@@ -208,7 +276,8 @@ for name in %s; do
     bl_directaudio "$depot"
     bl_game_cpus
     bl_fexcore
-    exec ${BL_TASKSET:-} "$depot/proton" "$verb" "$@"
+    bl_dxvk "$depot"
+    exec ${BL_TASKSET:-} "${BL_PROTON_BASE:-$depot}/proton" "$verb" "$@"
   fi
 done
 echo "bannerlator-proton: no ARM64 Proton depot yet - the client downloads one as this tool's dependency; retry the launch once it has" >&2
@@ -218,7 +287,7 @@ exit 1
 # and a % format would eat that into a single %, leaving a shell expansion that silently does
 # something else.
 LAUNCHER_SH = LAUNCHER_SH.replace(
-    "verb=$1; shift", "verb=$1; shift\n" + BL_DIRECTAUDIO_SETUP + BL_GAME_CPUS_SETUP + BL_FEXCORE_SETUP, 1)
+    "verb=$1; shift", "verb=$1; shift\n" + BL_DIRECTAUDIO_SETUP + BL_GAME_CPUS_SETUP + BL_FEXCORE_SETUP + BL_DXVK_SETUP, 1)
 
 # A third-party Proton dropped into compatibilitytools.d - GE-Proton, proton-cachyos, anything of
 # that shape - is adopted rather than used as shipped, for the same two reasons Valve's ARM64 depot
@@ -253,9 +322,10 @@ fi
 bl_directaudio "$here"
 bl_game_cpus
 bl_fexcore
+bl_dxvk "$here"
 # Proton takes its base directory from dirname(sys.argv[0]) without resolving it, so it has to be
-# started from its own tree.
-exec ${BL_TASKSET:-} "$here/%s" "$verb" "$@"
+# started from its own tree (or bl_dxvk's mirror of it).
+exec ${BL_TASKSET:-} "${BL_PROTON_BASE:-$here}/%s" "$verb" "$@"
 """
 
 EXTRA_COMPAT_TOOL_VDF = """"compatibilitytools"
@@ -415,7 +485,7 @@ def adopt_extras(tools):
             # ${major%%.*} of its own, and putting it through the format would eat both.
             body = (EXTRA_WRAPPER_SH % entry_point).replace(
                     'here=$(dirname "$0")',
-                    'here=$(dirname "$0")\n' + BL_DIRECTAUDIO_SETUP + BL_GAME_CPUS_SETUP + BL_FEXCORE_SETUP, 1)
+                    'here=$(dirname "$0")\n' + BL_DIRECTAUDIO_SETUP + BL_GAME_CPUS_SETUP + BL_FEXCORE_SETUP + BL_DXVK_SETUP, 1)
             with open(wrapper, "w", encoding="utf-8") as f:
                 f.write(body)
             os.chmod(wrapper, 0o755)
