@@ -1,0 +1,9 @@
+.gradle/
+build/
+local.properties
+.idea/
+*.iml
+.cxx/
+.externalNativeBuild/
+# Built by CI from linux/ (glibc aarch64); never committed.
+app/src/main/assets/linuxfs/*.so
