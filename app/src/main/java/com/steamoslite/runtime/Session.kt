@@ -109,6 +109,11 @@ class Session(
             "SDL_JOYSTICK_HIDAPI=0",
         )
         if (refreshHz > 1) guest += "BL_REFRESH=$refreshHz"
+        // FEXCore for games: the Proton launchers swap the chosen version's DLLs into the game's
+        // prefix, or put Proton's own back when none is chosen. A launch option can override it per
+        // game (BL_FEXCORE=2605 %command%, or BL_FEXCORE=proton).
+        guest += "BL_FEXCORE_ROOT=" + FexCore.prepare(context).path
+        guest += "BL_FEXCORE=" + FexCore.selected(context)
         LinuxRuntime.vulkanIcd(context)?.let { guest += "VK_ICD_FILENAMES=" + it.path }
         FakeInputWriter.getRingEnv(fakeInputDir).takeIf { it.isNotEmpty() }?.let { guest += "FAKE_EVDEV_MEMFD_PATHS=$it" }
         guest += LinuxRuntime.SESSION_SCRIPT

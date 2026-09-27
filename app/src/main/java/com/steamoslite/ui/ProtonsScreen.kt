@@ -35,6 +35,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.steamoslite.runtime.FexCore
 import com.steamoslite.runtime.Protons
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -50,6 +51,10 @@ internal data class ProtonsState(
     /** Bytes copied so far while an import runs, or null. */
     val importing: Long? = null,
     val message: String? = null,
+    /** FEXCore versions the app has, the imported ones among them, and the one games use. */
+    val fexVersions: List<String> = emptyList(),
+    val fexImported: List<String> = emptyList(),
+    val fexSelected: String = FexCore.PROTONS_OWN,
 )
 
 /** The screen with its data: reads the runtime, queues work for the next session. */
@@ -65,7 +70,13 @@ internal fun ProtonsRoute(onBack: () -> Unit) {
             Protons.cleanImports(context)
             Triple(Protons.valveEngines(context), Protons.installed(context), Protons.queued(context))
         }
-        state = state.copy(engines = engines, installed = installed, queued = queued)
+        val fex = withContext(Dispatchers.IO) {
+            Triple(FexCore.available(context), FexCore.imported(context), FexCore.selected(context))
+        }
+        state = state.copy(
+            engines = engines, installed = installed, queued = queued,
+            fexVersions = fex.first, fexImported = fex.second, fexSelected = fex.third,
+        )
     }
 
     LaunchedEffect(Unit) {
@@ -101,8 +112,41 @@ internal fun ProtonsRoute(onBack: () -> Unit) {
         }
     }
 
+    val fexPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri: Uri? ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        scope.launch {
+            val name = withContext(Dispatchers.IO) { Protons.displayName(context, uri) } ?: "fexcore.tzst"
+            if (!FexCore.looksLikePackage(name)) {
+                state = state.copy(message = "$name is not a FEXCore package (.tzst or .wcp).")
+                return@launch
+            }
+            val result = withContext(Dispatchers.IO) { runCatching { FexCore.import(context, uri, name) } }
+            state = state.copy(
+                message = result.fold(
+                    { "FEXCore $it imported. Choose it below to use it." },
+                    { "Could not import $name: ${it.message}" },
+                ),
+            )
+            reload()
+        }
+    }
+
     ProtonsScreen(
         state = state,
+        onSelectFex = { version ->
+            scope.launch {
+                withContext(Dispatchers.IO) { FexCore.select(context, version) }
+                state = state.copy(message = "Games use " + fexLabel(version) + " from the next SteamOS start.")
+                reload()
+            }
+        },
+        onImportFex = { fexPicker.launch(arrayOf("application/*", "*/*")) },
+        onRemoveFex = { version ->
+            scope.launch {
+                withContext(Dispatchers.IO) { FexCore.remove(context, version) }
+                reload()
+            }
+        },
         onBack = onBack,
         onImport = { picker.launch(arrayOf("application/*", "*/*")) },
         onInstall = { build ->
@@ -137,6 +181,9 @@ internal fun ProtonsScreen(
     onInstall: (Protons.CatalogBuild) -> Unit,
     onCancel: (String) -> Unit,
     onRemove: (Protons.Installed) -> Unit,
+    onSelectFex: (String) -> Unit = {},
+    onImportFex: () -> Unit = {},
+    onRemoveFex: (String) -> Unit = {},
 ) {
     LazyColumn(Modifier.fillMaxSize().padding(24.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         item {
@@ -181,6 +228,40 @@ internal fun ProtonsScreen(
             }
         }
 
+        item { Section("FEXCore") }
+        item {
+            Text(
+                "The x86 emulator Proton runs games' Windows code with. Each Proton brings its own; " +
+                    "choosing a version here swaps it into every game's prefix from its next start " +
+                    "(a game's very first start always uses Proton's own). For one game only, set its " +
+                    "launch option to BL_FEXCORE=2605 %command%.",
+                color = Color.LightGray,
+            )
+        }
+        items(listOf(FexCore.PROTONS_OWN) + state.fexVersions.reversed(), key = { "f:$it" }) { version ->
+            val current = version == state.fexSelected
+            Row_(
+                fexLabel(version),
+                when {
+                    version == FexCore.PROTONS_OWN -> "Whatever the game's Proton ships. The default."
+                    version in state.fexImported -> "Imported"
+                    else -> "Bundled"
+                },
+            ) {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    if (version in state.fexImported && !current) {
+                        OutlinedButton(onClick = { onRemoveFex(version) }) { Text("Remove") }
+                    }
+                    Button(onClick = { onSelectFex(version) }, enabled = !current) { Text(if (current) "In use" else "Use") }
+                }
+            }
+        }
+        item {
+            Row_("Import a FEXCore", "A GameNative or Winlator package: .tzst or .wcp with libarm64ecfex.dll and libwow64fex.dll") {
+                Button(onClick = onImportFex) { Text("Import…") }
+            }
+        }
+
         item { Section("Add a Proton") }
         item {
             Row_("Import from a file", "A Proton build for ARM64 Linux: .tar.gz, .tar.xz or .tar.zst") {
@@ -221,3 +302,5 @@ private fun Row_(title: String, detail: String, action: @Composable () -> Unit) 
         }
     }
 }
+
+internal fun fexLabel(version: String) = if (version == FexCore.PROTONS_OWN) "Proton's own" else "FEXCore $version"

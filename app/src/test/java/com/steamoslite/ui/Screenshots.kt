@@ -97,6 +97,8 @@ class Screenshots {
                             "CachyOS's build, heavily patched for performance.", 339_912_088, "cachyos --tag cachyos-11.0-20260703-slr"),
                     ),
                     catalogLoading = false,
+                    fexVersions = listOf("2507", "2508", "2511", "2512", "2601", "2603", "2604", "2605"),
+                    fexSelected = "2605",
                 ),
                 onBack = {}, onImport = {}, onInstall = {}, onCancel = {}, onRemove = {},
             )
