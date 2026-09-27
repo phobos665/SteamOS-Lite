@@ -77,6 +77,7 @@ import java.io.File
 class MainActivity : ComponentActivity() {
     /** Bumped on every resume so the list re-reads what Steam installed during the last session. */
     private var resumeCount by mutableStateOf(0)
+    private var showProtons by mutableStateOf(false)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -85,7 +86,10 @@ class MainActivity : ComponentActivity() {
             requestPermissions(arrayOf(Manifest.permission.WRITE_EXTERNAL_STORAGE), 1)
         }
         setContent {
-            AppTheme { Home(resumeCount, ::launch) }
+            AppTheme {
+                if (showProtons) ProtonsRoute(onBack = { showProtons = false })
+                else Home(resumeCount, ::launch, onOpenProtons = { showProtons = true })
+            }
         }
     }
 
@@ -119,7 +123,7 @@ internal sealed interface RuntimeState {
 
 /** Home's state and actions: the runtime check, the install, and the installed-games scan. */
 @Composable
-private fun Home(resumeCount: Int, onLaunch: (String?) -> Unit) {
+private fun Home(resumeCount: Int, onLaunch: (String?) -> Unit, onOpenProtons: () -> Unit) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var state by remember { mutableStateOf<RuntimeState>(RuntimeState.Checking) }
@@ -172,6 +176,7 @@ private fun Home(resumeCount: Int, onLaunch: (String?) -> Unit) {
         },
         onLaunch = onLaunch,
         onShareLogs = if (hasLogs) ({ LogShare.share(context) }) else null,
+        onOpenProtons = onOpenProtons,
     )
 }
 
@@ -186,6 +191,8 @@ internal fun HomeScreen(
     onLaunch: (String?) -> Unit,
     /** Shares the last session's logs; null hides the button (no session has run yet). */
     onShareLogs: (() -> Unit)? = null,
+    /** Opens the compatibility-tools screen; null hides the button. */
+    onOpenProtons: (() -> Unit)? = null,
     coverOf: @Composable (InstalledGame) -> Bitmap? = { loadCover(it) },
 ) {
     Column(Modifier.fillMaxSize().padding(24.dp)) {
@@ -200,7 +207,7 @@ internal fun HomeScreen(
                 Spacer(Modifier.height(12.dp))
                 FocusedButton("Try again", onClick = onRetry)
             }
-            is RuntimeState.Ready -> Library(state, games, onLaunch, { state.update?.let(onInstall) }, onShareLogs, coverOf)
+            is RuntimeState.Ready -> Library(state, games, onLaunch, { state.update?.let(onInstall) }, onShareLogs, onOpenProtons, coverOf)
         }
     }
 }
@@ -240,6 +247,7 @@ private fun Library(
     onLaunch: (String?) -> Unit,
     onUpdate: () -> Unit,
     onShareLogs: (() -> Unit)?,
+    onOpenProtons: (() -> Unit)?,
     coverOf: @Composable (InstalledGame) -> Bitmap?,
 ) {
     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -247,6 +255,10 @@ private fun Library(
         if (s.update != null) {
             Spacer(Modifier.width(16.dp))
             OutlinedButton(onClick = onUpdate) { Text("Update runtime to ${s.update.version}") }
+        }
+        if (onOpenProtons != null) {
+            Spacer(Modifier.width(16.dp))
+            OutlinedButton(onClick = onOpenProtons) { Text("Compatibility tools") }
         }
         if (onShareLogs != null) {
             Spacer(Modifier.width(16.dp))

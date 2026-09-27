@@ -67,6 +67,7 @@ class Screenshots {
                 onRetry = {},
                 onLaunch = {},
                 onShareLogs = if (shareLogs) ({}) else null,
+                onOpenProtons = if (shareLogs) ({}) else null,
                 coverOf = { covers[it.appId] },
             )
         }
@@ -81,6 +82,26 @@ class Screenshots {
     @Test fun setup_resume() = home(RuntimeState.Missing(release, 331_000_000L))
 
     @Test fun library() = home(RuntimeState.Ready("r9", null), shareLogs = true)
+
+    @Test fun compatibility_tools() = paparazzi.snapshot {
+        AppTheme {
+            ProtonsScreen(
+                state = ProtonsState(
+                    engines = listOf("Proton Experimental (ARM64)"),
+                    installed = listOf(com.steamoslite.runtime.Protons.Installed("GE-Proton11-7-aarch64", "GE-Proton11-7 (Bannerlator)")),
+                    queued = listOf("/data/user/0/com.steamoslite/files/protons/proton-custom-arm64.tar.xz"),
+                    catalog = listOf(
+                        com.steamoslite.runtime.Protons.CatalogBuild("GE-Proton 11-7", "GE-Proton11-7-aarch64",
+                            "GloriousEggroll's build, with its own game patches.", 645_786_140, "ge --tag GE-Proton11-7"),
+                        com.steamoslite.runtime.Protons.CatalogBuild("Proton CachyOS 11.0 (2026-07-03)", "proton-cachyos-11.0-20260703-slr-arm64",
+                            "CachyOS's build, heavily patched for performance.", 339_912_088, "cachyos --tag cachyos-11.0-20260703-slr"),
+                    ),
+                    catalogLoading = false,
+                ),
+                onBack = {}, onImport = {}, onInstall = {}, onCancel = {}, onRemove = {},
+            )
+        }
+    }
 
     @Test fun library_update_available() = home(RuntimeState.Ready("r8", release))
 
