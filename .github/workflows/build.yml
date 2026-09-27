@@ -86,7 +86,9 @@ jobs:
           grep "lib/arm64-v8a/" contents.txt
           unzip -o -q "$APK" lib/arm64-v8a/libbannerwayland.so -d apk
           NM="$ANDROID_SDK_ROOT/ndk/$NDK_VERSION/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-nm"
-          "$NM" -D --defined-only apk/lib/arm64-v8a/libbannerwayland.so | grep -q Java_com_steamoslite_wayland_WaylandCompositor_nativeStartWithSurface \
+          # Into a file first: grep -q stops reading early, and under pipefail nm's SIGPIPE fails the step.
+          "$NM" -D --defined-only apk/lib/arm64-v8a/libbannerwayland.so > syms.txt
+          grep -q Java_com_steamoslite_wayland_WaylandCompositor_nativeStartWithSurface syms.txt \
             || { echo "::error::libbannerwayland.so does not export the com.steamoslite JNI names"; exit 1; }
 
       - uses: actions/upload-artifact@v4
