@@ -67,6 +67,28 @@ jobs:
       - name: Build
         run: ./gradlew assembleDebug --no-daemon
 
+      # A session needs every one of these; a missing one only shows up on a device, as a black
+      # screen or a silent failure. Also checks the compositor's JNI names match the Java class.
+      - name: Check the APK
+        run: |
+          set -euo pipefail
+          APK=$(ls app/build/outputs/apk/debug/*.apk)
+          unzip -l "$APK" > contents.txt
+          for f in lib/arm64-v8a/libbannerwayland.so lib/arm64-v8a/libslnative.so \
+                   lib/arm64-v8a/libmain_hook.so lib/arm64-v8a/libhook_impl.so \
+                   lib/arm64-v8a/libwayland-server.so lib/arm64-v8a/libffi.so \
+                   lib/arm64-v8a/libpulseaudio.so lib/arm64-v8a/libpulsecore-13.0.so \
+                   assets/linuxfs/libblsession.so assets/linuxfs/libfakeinput.so \
+                   assets/linuxfs/usr/local/bin/bannerlator-session \
+                   assets/turnip.tzst assets/pulseaudio.tzst assets/wayland/keymap.xkb; do
+            grep -q " $f\$" contents.txt || { echo "::error::$f is missing from the APK"; exit 1; }
+          done
+          grep "lib/arm64-v8a/" contents.txt
+          unzip -o -q "$APK" lib/arm64-v8a/libbannerwayland.so -d apk
+          NM="$ANDROID_SDK_ROOT/ndk/$NDK_VERSION/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-nm"
+          "$NM" -D --defined-only apk/lib/arm64-v8a/libbannerwayland.so | grep -q Java_com_steamoslite_wayland_WaylandCompositor_nativeStartWithSurface \
+            || { echo "::error::libbannerwayland.so does not export the com.steamoslite JNI names"; exit 1; }
+
       - uses: actions/upload-artifact@v4
         with:
           name: steamos-lite-debug
