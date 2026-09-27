@@ -18,6 +18,7 @@ import android.view.WindowManager
 import android.widget.FrameLayout
 import android.widget.TextView
 import com.steamoslite.input.Controllers
+import com.steamoslite.input.OnScreenController
 import com.steamoslite.runtime.Session
 import com.steamoslite.util.FileUtils
 import com.steamoslite.util.TarZstd
