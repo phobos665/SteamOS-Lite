@@ -99,7 +99,7 @@ class MainActivity : ComponentActivity() {
 
 @Composable
 internal fun AppTheme(content: @Composable () -> Unit) {
-    MaterialTheme(colorScheme = darkColorScheme(primary = Color(0xFF1A9FFF), background = Color(0xFF0E141B))) {
+    MaterialTheme(colorScheme = darkColorScheme(primary = Color(0xFF1A9FFF), onPrimary = Color.White, background = Color(0xFF0E141B))) {
         Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background, content = content)
     }
 }
@@ -188,7 +188,7 @@ internal fun HomeScreen(
 private fun Setup(release: RuntimeInstaller.Release?, onInstall: (RuntimeInstaller.Release) -> Unit) {
     Text(
         "SteamOS needs its runtime: a Linux system with gamescope that runs Valve's own Steam client. " +
-            "It is downloaded once" + (release?.let { " (${it.size / (1024 * 1024)} MB)" } ?: "") +
+            "It is downloaded once" + (release?.let { " (${it.size / 1_000_000} MB)" } ?: "") +
             ", then Steam fetches itself the first time you launch.",
         color = Color.LightGray,
     )
