@@ -289,6 +289,15 @@ class SessionActivity : Activity() {
         return true
     }
 
+    /**
+     * The on-screen controller sees every touch first and keeps the gestures that start on its
+     * controls; everything else goes on to the views (the touch mouse on the surface, the menu).
+     */
+    override fun dispatchTouchEvent(event: MotionEvent): Boolean {
+        if (!quickMenu.isOpen && onScreen.handleTouch(event)) return true
+        return super.dispatchTouchEvent(event)
+    }
+
     override fun dispatchGenericMotionEvent(event: MotionEvent): Boolean {
         // While the menu is open the stick moves its focus (Android turns it into D-pad presses).
         if (quickMenu.isOpen) return super.dispatchGenericMotionEvent(event)

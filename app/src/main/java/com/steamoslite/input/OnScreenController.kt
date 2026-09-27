@@ -31,8 +31,9 @@ import kotlin.math.sin
  * opacity that turn blue while held) and the same stick and D-pad response. Keyboard and mouse
  * bindings, the editor, gyro and radial menus are left out.
  *
- * A touch that does not land on a control falls through to the screen underneath, so the touch
- * mouse still works around the controls.
+ * Touches arrive through [handleTouch], called by the activity for every touch before the view
+ * tree sees it. A gesture that does not start on a control is left alone, so the touch mouse still
+ * works around the controls.
  */
 @SuppressLint("ViewConstructor")
 class OnScreenController(context: Context, private val onState: (GamepadState) -> Unit) : View(context) {
@@ -111,6 +112,7 @@ class OnScreenController(context: Context, private val onState: (GamepadState) -
 
     /** Hidden or shown: everything held is let go, so no input sticks when the pad disappears. */
     fun releaseAll() {
+        ownsGesture = false
         elements.forEach { it.pointerId = -1; it.states.fill(false); it.thumb = null }
         state.reset()
         onState(state)
@@ -206,39 +208,63 @@ class OnScreenController(context: Context, private val onState: (GamepadState) -
 
     // ---- Touch (GameNative's handleTouchDown / handleTouchMove / handleTouchUp)
 
-    @SuppressLint("ClickableViewAccessibility")
-    override fun onTouchEvent(event: MotionEvent): Boolean {
+    /** Whether the gesture in progress (from its first finger down) is the pad's. */
+    private var ownsGesture = false
+
+    /**
+     * Every touch on the session screen comes here first, from the activity, before any view sees
+     * it - GameNative's single routing point. A gesture whose first finger lands on a control is
+     * the pad's, fingers and all; any other gesture is the touch mouse's and this returns false
+     * for all of it. Coordinates are the window's, which are this full-screen view's own.
+     */
+    fun handleTouch(event: MotionEvent): Boolean {
+        if (visibility != VISIBLE || grid == 0) return false
         val index = event.actionIndex
         when (event.actionMasked) {
-            MotionEvent.ACTION_DOWN, MotionEvent.ACTION_POINTER_DOWN -> {
-                val id = event.getPointerId(index)
-                val x = event.getX(index)
-                val y = event.getY(index)
-                val hit = elements.firstOrNull { it.pointerId == -1 && it.box.contains((x + 0.5f).toInt(), (y + 0.5f).toInt()) }
-                // The first finger decides who owns the gesture: off the controls, it is the
-                // screen's (the touch mouse), and the view underneath receives it.
-                if (hit == null) return event.actionMasked != MotionEvent.ACTION_DOWN
-                hit.pointerId = id
-                when (hit.type) {
-                    Type.BUTTON -> press(hit.bindings.first(), true)
-                    else -> move(hit, x, y)
-                }
+            MotionEvent.ACTION_DOWN -> {
+                ownsGesture = hitAt(event.getX(index), event.getY(index)) != null
+                if (!ownsGesture) return false
+                down(event.getPointerId(index), event.getX(index), event.getY(index))
+            }
+            MotionEvent.ACTION_POINTER_DOWN -> {
+                if (!ownsGesture) return false
+                down(event.getPointerId(index), event.getX(index), event.getY(index))
             }
             MotionEvent.ACTION_MOVE -> {
+                if (!ownsGesture) return false
                 for (i in 0 until event.pointerCount) {
                     val id = event.getPointerId(i)
                     elements.firstOrNull { it.pointerId == id && it.type != Type.BUTTON }?.let { move(it, event.getX(i), event.getY(i)) }
                 }
             }
-            MotionEvent.ACTION_UP, MotionEvent.ACTION_POINTER_UP -> {
+            MotionEvent.ACTION_POINTER_UP -> {
+                if (!ownsGesture) return false
                 val id = event.getPointerId(index)
                 elements.firstOrNull { it.pointerId == id }?.let(::release)
             }
-            MotionEvent.ACTION_CANCEL -> elements.filter { it.pointerId != -1 }.forEach(::release)
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                if (!ownsGesture) return false
+                ownsGesture = false
+                elements.filter { it.pointerId != -1 }.forEach(::release)
+            }
+            else -> return ownsGesture
         }
         onState(state)
         invalidate()
         return true
+    }
+
+    private fun hitAt(x: Float, y: Float) =
+        elements.firstOrNull { it.pointerId == -1 && it.box.contains((x + 0.5f).toInt(), (y + 0.5f).toInt()) }
+
+    private fun down(id: Int, x: Float, y: Float) {
+        val hit = hitAt(x, y) ?: return
+        hit.pointerId = id
+        android.util.Log.d(TAG, "pressed ${hit.label.ifEmpty { hit.type.name }}")
+        when (hit.type) {
+            Type.BUTTON -> press(hit.bindings.first(), true)
+            else -> move(hit, x, y)
+        }
     }
 
     private fun release(e: Element) {
@@ -305,6 +331,8 @@ class OnScreenController(context: Context, private val onState: (GamepadState) -
     }
 
     companion object {
+        private const val TAG = "OnScreenController"
+
         /** GameNative's DEFAULT_OVERLAY_OPACITY, its primary (white) and secondary (blue) colours. */
         private const val OPACITY = 0.4f
         private val NORMAL_COLOR = Color.argb((OPACITY * 255).toInt(), 255, 255, 255)
