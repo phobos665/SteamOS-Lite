@@ -2,6 +2,8 @@ plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
     id("org.jetbrains.kotlin.plugin.compose")
+    // Screenshot tests of the UI, rendered on the JVM (see .github/workflows/screenshots.yml).
+    id("app.cash.paparazzi")
 }
 
 android {
@@ -79,4 +81,6 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
     implementation("org.apache.commons:commons-compress:1.21")
     implementation("com.github.luben:zstd-jni:1.5.2-3@aar")
+
+    testImplementation("junit:junit:4.13.2")
 }

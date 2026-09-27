@@ -66,13 +66,7 @@ class SessionActivity : Activity() {
         pickHighestRefreshMode()
 
         surface = SurfaceView(this)
-        status = TextView(this).apply {
-            setTextColor(Color.WHITE)
-            setBackgroundColor(Color.BLACK)
-            textSize = 18f
-            gravity = Gravity.CENTER
-            text = "Starting SteamOS…"
-        }
+        status = loadingView(this)
         setContentView(FrameLayout(this).apply {
             setBackgroundColor(Color.BLACK)
             addView(surface, FrameLayout.LayoutParams(-1, -1))
@@ -305,6 +299,15 @@ class SessionActivity : Activity() {
 
     companion object {
         private const val TAG = "SessionActivity"
+
+        /** The loading screen shown over the surface until SteamOS is up. */
+        fun loadingView(context: android.content.Context) = TextView(context).apply {
+            setTextColor(Color.WHITE)
+            setBackgroundColor(Color.BLACK)
+            textSize = 18f
+            gravity = Gravity.CENTER
+            text = "Starting SteamOS…"
+        }
         const val EXTRA_APP_ID = "app_id"
         /** gamescope's size. The client's interface is the most expensive thing it draws: 720p. */
         const val OUTPUT_WIDTH = 1280

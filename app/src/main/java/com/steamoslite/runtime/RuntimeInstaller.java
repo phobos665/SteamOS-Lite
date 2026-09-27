@@ -54,7 +54,7 @@ public final class RuntimeInstaller {
         public final String sha256;
         public final long size;
 
-        Release(String version, String url, String sha256, long size) {
+        public Release(String version, String url, String sha256, long size) {
             this.version = version;
             this.url = url;
             this.sha256 = sha256;

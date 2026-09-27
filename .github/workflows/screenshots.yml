@@ -1,0 +1,54 @@
+name: Screenshots
+
+# Renders the app's screens on the JVM (Paparazzi) and commits them to docs/screenshots, so the
+# UI can be looked at without a device. Runs when the UI or the screenshot tests change.
+on:
+  push:
+    paths:
+      - 'app/src/main/java/com/steamoslite/ui/**'
+      - 'app/src/test/**'
+      - '.github/workflows/screenshots.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  screenshots:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      # Configuring the app module looks for its NDK even when no native task runs.
+      - name: Install NDK
+        run: yes | "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" --install "ndk;27.2.12479018" >/dev/null
+        env:
+          ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
+
+      - name: Render
+        run: ./gradlew recordPaparazziDebug --no-daemon
+
+      # Pushes made with the workflow's own token do not start other workflows, so this cannot loop.
+      - name: Commit the screenshots
+        run: |
+          set -euo pipefail
+          mkdir -p docs/screenshots
+          rm -f docs/screenshots/*.png
+          for f in app/src/test/snapshots/images/*.png; do
+            name=$(basename "$f" | sed 's/.*_Screenshots_//')
+            cp "$f" "docs/screenshots/$name"
+          done
+          ls -l docs/screenshots
+          git add docs/screenshots
+          if git diff --cached --quiet; then echo "no changes"; exit 0; fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "Update UI screenshots"
+          git push origin "HEAD:${GITHUB_REF_NAME}"

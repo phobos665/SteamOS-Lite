@@ -81,11 +81,7 @@ class MainActivity : ComponentActivity() {
             requestPermissions(arrayOf(Manifest.permission.WRITE_EXTERNAL_STORAGE), 1)
         }
         setContent {
-            MaterialTheme(colorScheme = darkColorScheme(primary = Color(0xFF1A9FFF), background = Color(0xFF0E141B))) {
-                Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
-                    Home(resumeCount, ::launch)
-                }
-            }
+            AppTheme { Home(resumeCount, ::launch) }
         }
     }
 
@@ -101,7 +97,14 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-private sealed interface RuntimeState {
+@Composable
+internal fun AppTheme(content: @Composable () -> Unit) {
+    MaterialTheme(colorScheme = darkColorScheme(primary = Color(0xFF1A9FFF), background = Color(0xFF0E141B))) {
+        Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background, content = content)
+    }
+}
+
+internal sealed interface RuntimeState {
     data object Checking : RuntimeState
     data class Missing(val release: RuntimeInstaller.Release?) : RuntimeState
     data class Installing(val stage: String, val percent: Int) : RuntimeState
@@ -109,6 +112,7 @@ private sealed interface RuntimeState {
     data class Ready(val version: String, val update: RuntimeInstaller.Release?) : RuntimeState
 }
 
+/** Home's state and actions: the runtime check, the install, and the installed-games scan. */
 @Composable
 private fun Home(resumeCount: Int, onLaunch: (String?) -> Unit) {
     val context = LocalContext.current
@@ -139,20 +143,43 @@ private fun Home(resumeCount: Int, onLaunch: (String?) -> Unit) {
     }
 
     LaunchedEffect(Unit) { refresh() }
+    val ready = state is RuntimeState.Ready
+    val games by produceState(initialValue = emptyList<InstalledGame>(), resumeCount, ready) {
+        if (ready) value = withContext(Dispatchers.IO) { SteamLibrary.installedGames(context) }
+    }
 
+    HomeScreen(
+        state = state,
+        games = games,
+        onInstall = ::install,
+        onRetry = { scope.launch { refresh() } },
+        onLaunch = onLaunch,
+    )
+}
+
+/** Home as drawn: everything it shows comes in as arguments (the screenshot tests draw it too). */
+@Composable
+internal fun HomeScreen(
+    state: RuntimeState,
+    games: List<InstalledGame>,
+    onInstall: (RuntimeInstaller.Release) -> Unit,
+    onRetry: () -> Unit,
+    onLaunch: (String?) -> Unit,
+    coverOf: @Composable (InstalledGame) -> Bitmap? = { loadCover(it) },
+) {
     Column(Modifier.fillMaxSize().padding(24.dp)) {
         Text("SteamOS Lite", fontSize = 28.sp, fontWeight = FontWeight.Bold, color = Color.White)
         Spacer(Modifier.height(16.dp))
-        when (val s = state) {
+        when (state) {
             RuntimeState.Checking -> Text("Checking…", color = Color.Gray)
-            is RuntimeState.Missing -> Setup(s.release, ::install)
-            is RuntimeState.Installing -> Progress(s)
+            is RuntimeState.Missing -> Setup(state.release, onInstall)
+            is RuntimeState.Installing -> Progress(state)
             is RuntimeState.Failed -> {
-                Text(s.message, color = Color(0xFFFF8080))
+                Text(state.message, color = Color(0xFFFF8080))
                 Spacer(Modifier.height(12.dp))
-                FocusedButton("Try again") { scope.launch { refresh() } }
+                FocusedButton("Try again", onClick = onRetry)
             }
-            is RuntimeState.Ready -> Library(s, resumeCount, onLaunch) { s.update?.let(::install) }
+            is RuntimeState.Ready -> Library(state, games, onLaunch, { state.update?.let(onInstall) }, coverOf)
         }
     }
 }
@@ -167,7 +194,7 @@ private fun Setup(release: RuntimeInstaller.Release?, onInstall: (RuntimeInstall
     )
     Spacer(Modifier.height(16.dp))
     if (release == null) Text("Looking up the latest runtime…", color = Color.Gray)
-    else FocusedButton("Install runtime ${release.version}") { onInstall(release) }
+    else FocusedButton("Install runtime ${release.version}", requestFocus = true) { onInstall(release) }
 }
 
 @Composable
@@ -179,11 +206,13 @@ private fun Progress(s: RuntimeState.Installing) {
 }
 
 @Composable
-private fun Library(s: RuntimeState.Ready, resumeCount: Int, onLaunch: (String?) -> Unit, onUpdate: () -> Unit) {
-    val context = LocalContext.current
-    val games by produceState(initialValue = emptyList<InstalledGame>(), resumeCount) {
-        value = withContext(Dispatchers.IO) { SteamLibrary.installedGames(context) }
-    }
+private fun Library(
+    s: RuntimeState.Ready,
+    games: List<InstalledGame>,
+    onLaunch: (String?) -> Unit,
+    onUpdate: () -> Unit,
+    coverOf: @Composable (InstalledGame) -> Bitmap?,
+) {
     Row(verticalAlignment = Alignment.CenterVertically) {
         FocusedButton("Launch SteamOS", requestFocus = true) { onLaunch(null) }
         if (s.update != null) {
@@ -204,17 +233,23 @@ private fun Library(s: RuntimeState.Ready, resumeCount: Int, onLaunch: (String?)
         horizontalArrangement = Arrangement.spacedBy(12.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        items(games, key = { it.appId }) { game -> GameCard(game) { onLaunch(game.appId) } }
+        items(games, key = { it.appId }) { game -> GameCard(game, coverOf(game)) { onLaunch(game.appId) } }
     }
 }
 
+/** The card's cover, decoded off the main thread. */
 @Composable
-private fun GameCard(game: InstalledGame, onClick: () -> Unit) {
-    val interaction = remember { MutableInteractionSource() }
-    val focused by interaction.collectIsFocusedAsState()
+private fun loadCover(game: InstalledGame): Bitmap? {
     val cover by produceState<Bitmap?>(initialValue = null, game.cover) {
         value = game.cover?.let { withContext(Dispatchers.IO) { decode(it) } }
     }
+    return cover
+}
+
+@Composable
+private fun GameCard(game: InstalledGame, cover: Bitmap?, onClick: () -> Unit) {
+    val interaction = remember { MutableInteractionSource() }
+    val focused by interaction.collectIsFocusedAsState()
     val shape = RoundedCornerShape(8.dp)
     Box(
         Modifier
@@ -224,9 +259,8 @@ private fun GameCard(game: InstalledGame, onClick: () -> Unit) {
             .clickable(interactionSource = interaction, indication = null, onClick = onClick),
         contentAlignment = Alignment.Center,
     ) {
-        val bitmap = cover
-        if (bitmap != null) {
-            Image(bitmap.asImageBitmap(), game.name, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+        if (cover != null) {
+            Image(cover.asImageBitmap(), game.name, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
         } else {
             Text(game.name, color = Color.White, textAlign = TextAlign.Center, modifier = Modifier.padding(8.dp))
         }
