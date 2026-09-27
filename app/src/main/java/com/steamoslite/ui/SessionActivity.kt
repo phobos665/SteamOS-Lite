@@ -42,7 +42,6 @@ class SessionActivity : Activity() {
     private lateinit var controllers: Controllers
     private var session: Session? = null
     private var compositorStarted = false
-    @Volatile private var firstFrame = false
     @Volatile private var ending = false
     private val main = Handler(Looper.getMainLooper())
 
@@ -98,7 +97,6 @@ class SessionActivity : Activity() {
         // The compositor sends this keymap to wl_keyboard clients so they can read our evdev codes.
         assets.open("wayland/keymap.xkb").use { i -> File(runtimeDir, "keymap.xkb").outputStream().use { i.copyTo(it) } }
         val driver = bundledDriver()
-        WaylandCompositor.setFirstFrameListener { firstFrame = true }
         WaylandCompositor.nativeSetOutputRefreshRate(refreshHz().toFloat())
         WaylandCompositor.nativeSetOutputSize(OUTPUT_WIDTH, OUTPUT_HEIGHT)
         WaylandCompositor.nativeStartWithSurface(
@@ -129,42 +127,106 @@ class SessionActivity : Activity() {
         }
     }
 
+    /** New complete lines appended to a log since the last read. */
+    private class Tail(private val file: File, startAtEnd: Boolean) {
+        private var offset = if (startAtEnd && file.isFile) file.length() else 0L
+
+        fun newLines(): List<String> {
+            if (!file.isFile) return emptyList()
+            val len = file.length()
+            if (len < offset) offset = 0 // rotated or rewritten
+            if (len == offset) return emptyList()
+            RandomAccessFile(file, "r").use { raf ->
+                raf.seek(offset)
+                val buf = ByteArray((len - offset).coerceAtMost(256 * 1024).toInt())
+                raf.readFully(buf)
+                val text = String(buf)
+                val end = text.lastIndexOf('\n')
+                if (end < 0) return emptyList()
+                offset += text.substring(0, end + 1).toByteArray().size
+                return text.substring(0, end).lines()
+            }
+        }
+    }
+
     /**
-     * Mirrors the session script's "== STEP" milestones onto the loading screen. A first run
-     * downloads the Steam client before anything is drawn - a minute or two that otherwise reads as
-     * a hang. gamescope presents a black frame long before that, so the first frame alone does not
-     * end the loading screen: it goes once the client is starting and something has been drawn (or,
-     * should the first-frame signal never come, a while after the client started).
+     * Keeps the loading screen up, with something true on it, until Steam's interface is running.
+     *
+     * The session script's "== STEP" milestones cover the runtime and the client download. After
+     * "starting the Steam client", the first boot of a fresh client downloads Valve's own update
+     * (hundreds of MB) with nothing on screen, so Steam's bootstrap log is followed too. The screen
+     * goes once steamwebhelper - the process that draws Big Picture - has been running a few seconds.
+     * gamescope's first frame is no signal: it presents black long before Steam draws. A tap
+     * dismisses the loading screen whenever the client has started, in case none of this fires.
      */
     private fun watchProgress(log: File) {
-        var offset = 0L
-        var clientStartedAt = 0L
+        val session = Tail(log, startAtEnd = false)
+        val bootstrap = Tail(
+            File(com.steamoslite.runtime.LinuxRuntime.rootDir(this), "root/.local/share/Steam/logs/bootstrap_log.txt"),
+            startAtEnd = true,
+        )
+        var step = ""
+        var detail = ""
+        var clientStarted = false
+        var helperSeenAt = 0L
         while (!ending) {
             Thread.sleep(1000)
-            val now = System.currentTimeMillis()
-            if (clientStartedAt > 0 && ((firstFrame && now - clientStartedAt >= 3000) || now - clientStartedAt >= 30000)) {
-                main.post { status.visibility = View.GONE }
-                return
-            }
-            if (!log.isFile || log.length() == offset) continue
             try {
-                RandomAccessFile(log, "r").use { raf ->
-                    if (raf.length() < offset) offset = 0
-                    raf.seek(offset)
-                    val buf = ByteArray((raf.length() - offset).coerceAtMost(256 * 1024).toInt())
-                    raf.readFully(buf)
-                    offset += buf.size
-                    val step = String(buf).lineSequence().mapNotNull { line ->
-                        val at = line.indexOf("== STEP ")
-                        if (at < 0) null else line.substring(at + 8).substringAfter(' ').trim()
-                    }.lastOrNull()
-                    if (step != null) {
-                        if (clientStartedAt == 0L && step.startsWith("starting the Steam client")) clientStartedAt = now
-                        main.post { status.text = "Starting SteamOS…\n\n$step" }
+                session.newLines().mapNotNull { line ->
+                    val at = line.indexOf("== STEP ")
+                    if (at < 0) null else line.substring(at + 8).substringAfter(' ').trim()
+                }.lastOrNull()?.let {
+                    step = it
+                    detail = ""
+                    if (it.startsWith("starting the Steam client") && !clientStarted) {
+                        clientStarted = true
+                        main.post { status.setOnClickListener { status.visibility = View.GONE } }
+                    }
+                }
+                if (clientStarted) {
+                    bootstrap.newLines().lastOrNull { it.isNotBlank() }?.let {
+                        // "[2026-09-27 12:00:00] Downloading update (12,345 of 665,432 KB)..."
+                        detail = it.substringAfter("] ").trim()
                     }
                 }
             } catch (_: Exception) {}
+
+            if (clientStarted && steamInterfaceRunning()) {
+                if (helperSeenAt == 0L) helperSeenAt = System.currentTimeMillis()
+                if (System.currentTimeMillis() - helperSeenAt >= 5000) {
+                    main.post { status.visibility = View.GONE }
+                    return
+                }
+            } else {
+                helperSeenAt = 0L
+            }
+
+            val text = buildString {
+                append("Starting SteamOS…")
+                if (step.isNotEmpty()) append("\n\n").append(step)
+                if (detail.isNotEmpty()) append("\n").append(detail)
+                if (clientStarted) {
+                    append("\n\nThe first start updates Steam itself and can take several minutes.")
+                    append("\nTap to show the screen anyway.")
+                }
+            }
+            main.post { if (status.visibility == View.VISIBLE) status.text = text }
         }
+    }
+
+    /** True while a steamwebhelper process - Steam's interface - is alive in the session. */
+    private fun steamInterfaceRunning(): Boolean {
+        val procs = File("/proc").listFiles() ?: return false
+        for (p in procs) {
+            if (!p.name.all(Char::isDigit)) continue
+            try {
+                // Chromium may rewrite its command line into one space-separated string, so match
+                // anywhere - but not the session script's own `pgrep -f steamwebhelper|...`.
+                val cmd = String(File(p, "cmdline").readBytes())
+                if ("steamwebhelper" in cmd && "pgrep" !in cmd) return true
+            } catch (_: Exception) {}
+        }
+        return false
     }
 
     /** The bundled Turnip, unpacked once per APK version: (driver dir with trailing /, library). */
