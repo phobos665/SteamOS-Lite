@@ -40,6 +40,7 @@ class SessionActivity : Activity() {
     private lateinit var status: TextView
     private lateinit var keyboard: KeyboardBridge
     private lateinit var quickMenu: QuickMenu
+    private lateinit var onScreen: OnScreenController
     private lateinit var controllers: Controllers
     private var session: Session? = null
     private var compositorStarted = false
@@ -70,9 +71,16 @@ class SessionActivity : Activity() {
         surface = SurfaceView(this)
         status = loadingView(this)
         keyboard = KeyboardBridge(this)
+        controllers = Controllers(this, Session.fakeInputDir(this))
+        onScreen = OnScreenController(this) { controllers.setOnScreen(it) }.apply {
+            visibility = if (prefs.getBoolean(PREF_ON_SCREEN, false)) View.VISIBLE else View.GONE
+        }
         quickMenu = QuickMenu(this).apply {
             setItems("SteamOS", listOf(
                 QuickMenu.Item({ if (keyboard.keyboardVisible) "Hide keyboard" else "Show keyboard" }) { toggleKeyboard() },
+                QuickMenu.Item({ if (onScreenShown) "Hide on-screen controller" else "Show on-screen controller" }) {
+                    setOnScreenShown(!onScreenShown)
+                },
                 QuickMenu.Item({ "Exit SteamOS" }) { finishSession(null) },
                 QuickMenu.Item({ "Close menu" }) {},
             ))
@@ -81,12 +89,12 @@ class SessionActivity : Activity() {
             setBackgroundColor(Color.BLACK)
             addView(surface, FrameLayout.LayoutParams(-1, -1))
             addView(keyboard, FrameLayout.LayoutParams(1, 1))
+            addView(onScreen, FrameLayout.LayoutParams(-1, -1))
             addView(status, FrameLayout.LayoutParams(-1, -1))
             addView(quickMenu, FrameLayout.LayoutParams(-1, -1))
         })
         hideSystemBars()
 
-        controllers = Controllers(this, Session.fakeInputDir(this))
         getSystemService(InputManager::class.java).registerInputDeviceListener(inputDevices, main)
 
         surface.holder.addCallback(object : SurfaceHolder.Callback {
@@ -318,6 +326,17 @@ class SessionActivity : Activity() {
         return super.dispatchKeyEvent(event)
     }
 
+    private val prefs by lazy { getSharedPreferences("session", MODE_PRIVATE) }
+    private val onScreenShown get() = onScreen.visibility == View.VISIBLE
+
+    /** Shows or hides the touch gamepad; the choice is kept for the next session. */
+    private fun setOnScreenShown(shown: Boolean) {
+        onScreen.releaseAll()
+        onScreen.visibility = if (shown) View.VISIBLE else View.GONE
+        if (!shown) controllers.setOnScreen(null)
+        prefs.edit().putBoolean(PREF_ON_SCREEN, shown).apply()
+    }
+
     private fun toggleKeyboard() {
         if (keyboard.keyboardVisible) keyboard.hide() else keyboard.show()
     }
@@ -392,6 +411,7 @@ class SessionActivity : Activity() {
             text = "Starting SteamOS…"
         }
         const val EXTRA_APP_ID = "app_id"
+        private const val PREF_ON_SCREEN = "onScreenController"
         /** gamescope's size. The client's interface is the most expensive thing it draws: 720p. */
         const val OUTPUT_WIDTH = 1280
         const val OUTPUT_HEIGHT = 720

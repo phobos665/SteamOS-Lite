@@ -31,6 +31,10 @@ class Controllers(context: Context, private val fakeInputDir: File) {
     private val writers = arrayOfNulls<FakeInputWriter>(MAX_SLOTS)
     private val states = Array(MAX_SLOTS) { GamepadState() }
 
+    /** The on-screen controller's state while it is shown, merged into player 1's pad. */
+    private var onScreen: GamepadState? = null
+    private val merged = GamepadState()
+
     @Volatile private var rumbleServer: LocalServerSocket? = null
     @Volatile private var rumbleRunning = false
 
@@ -58,7 +62,7 @@ class Controllers(context: Context, private val fakeInputDir: File) {
     /** A pad was unplugged: Steam sees it removed. */
     fun onDeviceRemoved() {
         val present = InputDevice.getDeviceIds().asList().mapNotNull { InputDevice.getDevice(it)?.descriptor }.toSet()
-        val gone = slotByDescriptor.filterKeys { it !in present }
+        val gone = slotByDescriptor.filterKeys { it !in present && it != ON_SCREEN_KEY }
         for ((descriptor, slot) in gone) {
             slotByDescriptor.remove(descriptor)
             writers[slot]?.destroy()
@@ -129,20 +133,60 @@ class Controllers(context: Context, private val fakeInputDir: File) {
         return true
     }
 
-    private fun publish(slot: Int) {
-        writers[slot]?.writeGamepadState(states[slot])
+    /**
+     * The on-screen controller changed ([state]), or was hidden (null). Like GameNative's virtual
+     * pad it is player 1: its input is merged into the first pad's, so it drives the same
+     * controller a game is already listening to. With no physical pad it takes a slot of its own.
+     */
+    fun setOnScreen(state: GamepadState?) {
+        onScreen = state
+        if (state != null && slotByDescriptor.isEmpty()) claim(ON_SCREEN_KEY, "on-screen controller")
+        if (state == null) {
+            slotByDescriptor.remove(ON_SCREEN_KEY)?.let { slot ->
+                writers[slot]?.destroy()
+                writers[slot] = null
+                states[slot].reset()
+            }
+        }
+        primarySlot()?.let(::publish)
     }
+
+    private fun primarySlot(): Int? = slotByDescriptor.values.minOrNull()
+
+    private fun publish(slot: Int) {
+        val touch = onScreen
+        if (touch == null || slot != primarySlot()) {
+            writers[slot]?.writeGamepadState(states[slot])
+            return
+        }
+        val pad = states[slot]
+        merged.buttons = (pad.buttons.toInt() or touch.buttons.toInt()).toShort()
+        for (i in 0 until 4) merged.dpad[i] = pad.dpad[i] || touch.dpad[i]
+        merged.thumbLX = stronger(pad.thumbLX, touch.thumbLX)
+        merged.thumbLY = stronger(pad.thumbLY, touch.thumbLY)
+        merged.thumbRX = stronger(pad.thumbRX, touch.thumbRX)
+        merged.thumbRY = stronger(pad.thumbRY, touch.thumbRY)
+        merged.triggerL = max(pad.triggerL, touch.triggerL)
+        merged.triggerR = max(pad.triggerR, touch.triggerR)
+        writers[slot]?.writeGamepadState(merged)
+    }
+
+    private fun stronger(a: Float, b: Float) = if (abs(b) > abs(a)) b else a
 
     /** One slot per physical pad: its sub-devices (a pad can enumerate several) share it. */
     private fun slotFor(device: InputDevice): Int? {
         val key = device.descriptor ?: "${device.name}:${device.vendorId}:${device.productId}"
+        return slotByDescriptor[key] ?: claim(key, "${device.name} (${"%04x:%04x".format(device.vendorId, device.productId)})")
+    }
+
+    private fun claim(key: String, name: String): Int? {
         slotByDescriptor[key]?.let { return it }
         val used = slotByDescriptor.values.toSet()
         val slot = (0 until MAX_SLOTS).firstOrNull { it !in used } ?: return null
         slotByDescriptor[key] = slot
         states[slot].reset()
         writers[slot] = FakeInputWriter(fakeInputDir.path, slot).also { it.open() }
-        Log.i(TAG, "slot $slot <- ${device.name} (${"%04x:%04x".format(device.vendorId, device.productId)})")
+        Log.i(TAG, "slot $slot <- $name")
         return slot
     }
 
@@ -209,6 +253,7 @@ class Controllers(context: Context, private val fakeInputDir: File) {
     companion object {
         private const val TAG = "Controllers"
         const val MAX_SLOTS = 4
+        private const val ON_SCREEN_KEY = "on-screen"
         /** Must match the name libfakeinput.so connects to. */
         private const val RUMBLE_SOCKET = "winlator_vibration"
         private const val STICK_DEAD_ZONE = 0.15f
