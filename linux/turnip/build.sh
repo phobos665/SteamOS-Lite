@@ -36,12 +36,13 @@ case $variant in
     # Found by what they contain, not by file name: Mesa moves these between releases. Each change
     # must land somewhere, or the variant would quietly be the a7xx build.
     tu=src/freedreno/vulkan
-    edit() { # <pattern> <sed expression>
+    edit() { # <pattern> <sed expression> [grep options]
       local files
-      files=$(grep -rlF -- "$1" "$tu") || { echo "a6xx: '$1' is gone from $tu" >&2; exit 1; }
+      files=$(grep -rlF "${@:3}" -- "$1" "$tu") || { echo "a6xx: '$1' is gone from $tu" >&2; exit 1; }
       sed -i "$2" $files
     }
-    edit tu_bo_init_new_cached 's/tu_bo_init_new_cached/tu_bo_init_new/g'
+    # Callers only: the helper itself is defined in a header, and renaming that would clash.
+    edit 'tu_bo_init_new_cached(' 's/tu_bo_init_new_cached(/tu_bo_init_new(/g' --include='*.cc'
     edit 'has_cached_coherent_memory =' 's/physical_device->has_cached_coherent_memory = .*/physical_device->has_cached_coherent_memory = false;/'
     edit VK_MEMORY_PROPERTY_HOST_CACHED_BIT 's/dev->physical_device->has_cached_coherent_memory ? VK_MEMORY_PROPERTY_HOST_CACHED_BIT : 0/0/g; s/VK_MEMORY_PROPERTY_HOST_CACHED_BIT/0/g'
     edit 'if (TU_DEBUG(SYSMEM)) {' '/if (TU_DEBUG(SYSMEM)) {/i \   return true;'
