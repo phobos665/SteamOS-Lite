@@ -1,0 +1,224 @@
+#!/usr/bin/python3
+# Writes the app's non-Steam shortcuts into the Steam client's library, before the client starts.
+#
+#   bannerlator-steam-shortcuts <steam root>
+#
+# The app lists what it wants in ~/.bl-shortcuts.json:
+#   {"shortcuts": [{"key": "...", "name": "...", "exe": "...", "startDir": "...",
+#                   "launchOptions": "...", "tags": ["..."]}]}
+# "exe" may be "@proton:<file>", a Windows program shipped inside Valve's ARM64 Proton (the
+# shortcut test uses notepad.exe), resolved here because only the session knows where the depot is.
+#
+# Each shortcut's id is derived from its key, not from its exe and name as Steam's own "Add a
+# Non-Steam Game" does, so moving or renaming a game keeps its artwork, playtime and prefix. Our ids
+# are listed in ~/.bl-shortcut-ids for bannerlator-steam-compat, which maps them to our Proton the
+# same way it maps Steam titles. Shortcuts the user added themselves are left exactly as they are.
+#
+# The client keeps shortcuts in memory and rewrites shortcuts.vdf itself, so this only runs while
+# it is down: the session calls it before starting the client.
+import glob
+import json
+import os
+import shutil
+import struct
+import sys
+import zlib
+
+WANTED = os.path.expanduser("~/.bl-shortcuts.json")
+IDS = os.path.expanduser("~/.bl-shortcut-ids")
+PROTONS = ("Proton Experimental (ARM64)", "Proton 11.0 (ARM64)")
+
+T_MAP, T_STR, T_INT, T_FLOAT, T_UINT64, T_END = 0, 1, 2, 3, 7, 8
+
+
+def short_id(key):
+    """The unsigned 32-bit id grid art, compatdata and CompatToolMapping use."""
+    return (zlib.crc32(("bl:" + key).encode("utf-8")) & 0xFFFFFFFF) | 0x80000000
+
+
+def long_id(sid):
+    """steam://rungameid/<this> starts the shortcut."""
+    return (sid << 32) | 0x02000000
+
+
+# ---------------------------------------------------------------- binary KeyValues, round-trip
+
+def cstr(data, i):
+    end = data.index(b"\0", i)
+    return data[i:end].decode("utf-8", "replace"), end + 1
+
+
+def parse(data, i=0):
+    """[(type, key, value)] until the block's end marker; maps nest. Unknown types raise."""
+    out = []
+    while i < len(data):
+        t = data[i]
+        i += 1
+        if t == T_END:
+            return out, i
+        key, i = cstr(data, i)
+        if t == T_MAP:
+            value, i = parse(data, i)
+        elif t == T_STR:
+            value, i = cstr(data, i)
+        elif t == T_INT:
+            value = struct.unpack_from("<i", data, i)[0]
+            i += 4
+        elif t == T_FLOAT:
+            value = struct.unpack_from("<f", data, i)[0]
+            i += 4
+        elif t == T_UINT64:
+            value = struct.unpack_from("<Q", data, i)[0]
+            i += 8
+        else:
+            raise ValueError("unknown type %d at %d" % (t, i - 1))
+        out.append((t, key, value))
+    return out, i
+
+
+def write(entries):
+    out = bytearray()
+    for t, key, value in entries:
+        out.append(t)
+        out += key.encode("utf-8") + b"\0"
+        if t == T_MAP:
+            out += write(value)
+        elif t == T_STR:
+            out += value.encode("utf-8") + b"\0"
+        elif t == T_INT:
+            out += struct.pack("<i", value)
+        elif t == T_FLOAT:
+            out += struct.pack("<f", value)
+        elif t == T_UINT64:
+            out += struct.pack("<Q", value)
+    out.append(T_END)
+    return bytes(out)
+
+
+def field(entry, name):
+    for t, key, value in entry:
+        if key.lower() == name.lower():
+            return value
+    return None
+
+
+# ---------------------------------------------------------------- shortcuts
+
+def resolve_exe(steam_root, exe):
+    if not exe.startswith("@proton:"):
+        return exe
+    name = exe.split(":", 1)[1]
+    for depot in PROTONS:
+        base = os.path.join(steam_root, "steamapps", "common", depot, "files", "lib", "wine")
+        for arch in ("aarch64-windows", "x86_64-windows", "i386-windows"):
+            path = os.path.join(base, arch, name)
+            if os.path.isfile(path):
+                return path
+    return None
+
+
+def quoted(path):
+    return '"%s"' % path if path and not path.startswith('"') else path
+
+
+def entry_for(sid, want, exe):
+    start = want.get("startDir") or os.path.dirname(exe)
+    tags = [(T_STR, str(n), tag) for n, tag in enumerate(want.get("tags") or [])]
+    return [
+        (T_INT, "appid", sid - (1 << 32)),
+        (T_STR, "AppName", want["name"]),
+        (T_STR, "Exe", quoted(exe)),
+        (T_STR, "StartDir", quoted(start)),
+        (T_STR, "icon", want.get("icon", "")),
+        (T_STR, "ShortcutPath", ""),
+        (T_STR, "LaunchOptions", want.get("launchOptions", "")),
+        (T_INT, "IsHidden", 0),
+        (T_INT, "AllowDesktopConfig", 1),
+        (T_INT, "AllowOverlay", 1),
+        (T_INT, "OpenVR", 0),
+        (T_INT, "Devkit", 0),
+        (T_STR, "DevkitGameID", ""),
+        (T_INT, "DevkitOverrideAppID", 0),
+        (T_INT, "LastPlayTime", 0),
+        (T_STR, "FlatpakAppID", ""),
+        (T_MAP, "tags", tags),
+    ]
+
+
+def main():
+    steam_root = sys.argv[1]
+    try:
+        with open(WANTED, encoding="utf-8") as f:
+            wanted = json.load(f).get("shortcuts", [])
+    except (OSError, ValueError):
+        wanted = []
+    try:
+        with open(IDS) as f:
+            previous = {int(line) for line in f if line.strip().isdigit()}
+    except OSError:
+        previous = set()
+
+    ours = []
+    art = []
+    for want in wanted:
+        exe = resolve_exe(steam_root, want.get("exe", ""))
+        if not exe:
+            print("bannerlator-steam-shortcuts: %s: %s not found yet; skipped this session" % (want.get("name"), want.get("exe")))
+            continue
+        sid = short_id(want["key"])
+        ours.append((sid, entry_for(sid, want, exe)))
+        art.append((sid, want))
+        print("bannerlator-steam-shortcuts: %s -> id %d (steam://rungameid/%d) exe %s" % (want["name"], sid, long_id(sid), exe))
+    owned = previous | {sid for sid, _ in ours}
+
+    accounts = [d for d in glob.glob(os.path.join(steam_root, "userdata", "*")) if os.path.basename(d).isdigit()]
+    if not accounts:
+        print("bannerlator-steam-shortcuts: no account folder yet (first sign-in); shortcuts are written next session")
+    for account in accounts:
+        path = os.path.join(account, "config", "shortcuts.vdf")
+        existing = []
+        if os.path.isfile(path):
+            try:
+                with open(path, "rb") as f:
+                    root, _ = parse(f.read())
+                existing = next((v for t, k, v in root if t == T_MAP and k.lower() == "shortcuts"), [])
+            except (OSError, ValueError, IndexError, struct.error) as e:
+                # Never overwrite a file this cannot read back: the user's own shortcuts are in it.
+                print("bannerlator-steam-shortcuts: %s unreadable (%s); left alone" % (path, e))
+                continue
+        keep = []
+        for t, k, v in existing:
+            appid = field(v, "appid") if t == T_MAP else None
+            if appid is not None and (appid & 0xFFFFFFFF) in owned:
+                continue
+            keep.append(v)
+        rows = keep + [entry for _, entry in ours]
+        if not ours and len(keep) == len(existing):
+            continue  # nothing of ours, now or before: do not touch the file
+        data = write([(T_MAP, "shortcuts", [(T_MAP, str(n), row) for n, row in enumerate(rows)])])
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        tmp = path + ".bannerlator"
+        with open(tmp, "wb") as f:
+            f.write(data)
+        os.replace(tmp, path)
+        print("bannerlator-steam-shortcuts: %s: %d of ours, %d of the user's" % (path, len(ours), len(keep)))
+
+        grid = os.path.join(account, "config", "grid")
+        for sid, want in art:
+            for kind, suffix in (("p", "p"), ("hero", "_hero")):
+                src = (want.get("art") or {}).get(kind)
+                if not src or not os.path.isfile(src):
+                    continue
+                os.makedirs(grid, exist_ok=True)
+                dst = os.path.join(grid, "%d%s%s" % (sid, suffix, os.path.splitext(src)[1] or ".jpg"))
+                if not os.path.isfile(dst) or os.path.getmtime(dst) < os.path.getmtime(src):
+                    shutil.copyfile(src, dst)
+
+    tmp = IDS + ".tmp"
+    with open(tmp, "w") as f:
+        f.write("".join("%d\n" % sid for sid, _ in ours))
+    os.replace(tmp, IDS)
+
+
+if __name__ == "__main__":
+    main()

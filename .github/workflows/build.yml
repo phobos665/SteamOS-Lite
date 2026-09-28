@@ -1,0 +1,101 @@
+name: Build APK
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
+  NDK_VERSION: 27.2.12479018
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Install NDK and CMake
+        run: |
+          yes | "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" --install "ndk;$NDK_VERSION" "cmake;3.22.1" >/dev/null
+
+      # The two libraries the Linux session preloads are glibc aarch64 builds: they load into
+      # gamescope, the Steam client and the games, never into the app. Built from source here and
+      # shipped as assets, so the app refreshes them in an installed runtime on every launch.
+      - name: Build the session's glibc preload libraries
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq gcc-aarch64-linux-gnu g++-aarch64-linux-gnu >/dev/null
+          D=app/src/main/assets/linuxfs
+          mkdir -p "$D"
+          aarch64-linux-gnu-gcc -shared -fPIC -O2 -Wall -pthread \
+            -o "$D/libblsession.so" linux/preload/*.c -ldl
+          aarch64-linux-gnu-strip --strip-unneeded "$D/libblsession.so"
+          # Static C++ runtime: Steam ships its own libstdc++ and rewrites LD_LIBRARY_PATH, so a
+          # preload that pulled the system one in ahead of it would be a version conflict.
+          aarch64-linux-gnu-g++ -shared -fPIC -O2 -Wall -Wno-attributes -Wno-nonnull-compare -pthread \
+            -std=c++17 -static-libstdc++ -static-libgcc \
+            -o "$D/libfakeinput.so" linux/fakeinput/fakeinput_steam.cpp -ldl
+          aarch64-linux-gnu-strip --strip-unneeded "$D/libfakeinput.so"
+          NEED=$(aarch64-linux-gnu-readelf -d "$D/libfakeinput.so" | sed -n 's/.*NEEDED.*\[\(.*\)\]/\1/p')
+          for bad in libstdc++.so.6 libgcc_s.so.1; do
+            if printf '%s\n' "$NEED" | grep -qx "$bad"; then
+              echo "::error::libfakeinput.so links $bad - the C++ runtime must stay static"; exit 1
+            fi
+          done
+          for sym in open openat ioctl read close poll; do
+            aarch64-linux-gnu-nm -D --defined-only "$D/libfakeinput.so" | awk '{print $NF}' | grep -qx "$sym" \
+              || { echo "::error::libfakeinput.so does not export $sym"; exit 1; }
+          done
+          for sym in socket bind getsockname statfs; do
+            aarch64-linux-gnu-nm -D --defined-only "$D/libblsession.so" | awk '{print $NF}' | grep -qx "$sym" \
+              || { echo "::error::libblsession.so does not export $sym"; exit 1; }
+          done
+          ls -l "$D"
+
+      - name: Build
+        run: ./gradlew assembleDebug --no-daemon
+
+      - name: Unit tests
+        run: ./gradlew testDebugUnitTest --tests 'com.steamoslite.util.*' --no-daemon
+
+      # A session needs every one of these; a missing one only shows up on a device, as a black
+      # screen or a silent failure. Also checks the compositor's JNI names match the Java class.
+      - name: Check the APK
+        run: |
+          set -euo pipefail
+          APK=$(ls app/build/outputs/apk/debug/*.apk)
+          unzip -l "$APK" > contents.txt
+          for f in lib/arm64-v8a/libbannerwayland.so lib/arm64-v8a/libslnative.so \
+                   lib/arm64-v8a/libmain_hook.so lib/arm64-v8a/libhook_impl.so \
+                   lib/arm64-v8a/libwayland-server.so lib/arm64-v8a/libffi.so \
+                   lib/arm64-v8a/libpulseaudio.so lib/arm64-v8a/libpulsecore-13.0.so \
+                   assets/linuxfs/libblsession.so assets/linuxfs/libfakeinput.so \
+                   assets/linuxfs/usr/local/bin/bannerlator-session \
+                   assets/turnip.tzst assets/pulseaudio.tzst assets/wayland/keymap.xkb; do
+            grep -q " $f\$" contents.txt || { echo "::error::$f is missing from the APK"; exit 1; }
+          done
+          grep "lib/arm64-v8a/" contents.txt
+          unzip -o -q "$APK" lib/arm64-v8a/libbannerwayland.so -d apk
+          NM="$ANDROID_SDK_ROOT/ndk/$NDK_VERSION/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-nm"
+          # Into a file first: grep -q stops reading early, and under pipefail nm's SIGPIPE fails the step.
+          "$NM" -D --defined-only apk/lib/arm64-v8a/libbannerwayland.so > syms.txt
+          grep -q Java_com_steamoslite_wayland_WaylandCompositor_nativeStartWithSurface syms.txt \
+            || { echo "::error::libbannerwayland.so does not export the com.steamoslite JNI names"; exit 1; }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: steamos-lite-debug
+          path: app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
