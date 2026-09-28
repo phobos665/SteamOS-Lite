@@ -43,6 +43,27 @@
             android:theme="@android:style/Theme.Material.NoActionBar.Fullscreen"
             android:configChanges="keyboard|keyboardHidden|orientation|screenSize|screenLayout|smallestScreenSize|density|navigation|colorMode|touchscreen|uiMode" />
 
+        <!-- What frontends (Daijisho, Cocoon, ES-DE) start: resolves the game and hands over to
+             SessionActivity. No UI, no task of its own. -->
+        <activity
+            android:name=".frontend.FrontendLaunchActivity"
+            android:exported="true"
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:taskAffinity=""
+            android:theme="@android:style/Theme.NoDisplay">
+            <intent-filter>
+                <action android:name="com.steamoslite.LAUNCH_GAME" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="steamoslite" android:host="run" />
+            </intent-filter>
+        </activity>
+
         <service
             android:name=".runtime.InstallService"
             android:exported="false"

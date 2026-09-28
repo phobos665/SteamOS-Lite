@@ -36,6 +36,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.steamoslite.frontend.FrontendExport
 import com.steamoslite.runtime.ComponentStore
 import com.steamoslite.runtime.Dxvk
 import com.steamoslite.runtime.FexCore
@@ -69,6 +70,8 @@ internal data class SettingsState(
     val protonLog: Boolean = true,
     val clientAllCores: Boolean = true,
     val onScreen: Boolean = false,
+    /** The frontend shortcut folder, or null when exporting is off. */
+    val frontendDir: String? = null,
     val message: String? = null,
 )
 
@@ -85,6 +88,10 @@ internal sealed interface SettingsChange {
     data class ProtonLog(val on: Boolean) : SettingsChange
     data class ClientAllCores(val on: Boolean) : SettingsChange
     data class OnScreen(val on: Boolean) : SettingsChange
+    /** Opens the folder picker for frontend shortcuts. */
+    data object FrontendPick : SettingsChange
+    data class FrontendDir(val path: String?) : SettingsChange
+    data object FrontendExportNow : SettingsChange
 }
 
 /** The screen with its data: every change is saved at once and applies from the next SteamOS start. */
@@ -110,6 +117,7 @@ internal fun SettingsRoute(onBack: () -> Unit) {
                 protonLog = Settings.protonLog(context),
                 clientAllCores = Settings.clientAllCores(context),
                 onScreen = Settings.onScreenController(context),
+                frontendDir = FrontendExport.dir(context)?.path,
             )
         }
     }
@@ -137,7 +145,42 @@ internal fun SettingsRoute(onBack: () -> Unit) {
         }
     }
 
+    val folderPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { tree: Uri? ->
+        if (tree == null) return@rememberLauncherForActivityResult
+        val path = FrontendExport.pathOfTree(context, tree)
+        if (path == null) {
+            state = state.copy(message = "That folder is not on a storage volume SteamOS Lite can write to; pick another.")
+            return@rememberLauncherForActivityResult
+        }
+        scope.launch {
+            val count = withContext(Dispatchers.IO) {
+                FrontendExport.setDir(context, path)
+                FrontendExport.sync(context)
+            }
+            reload()
+            state = state.copy(message = exportMessage(count, path))
+        }
+    }
+
     SettingsScreen(state, onBack) { change ->
+        if (change is SettingsChange.FrontendPick) {
+            folderPicker.launch(null)
+            return@SettingsScreen
+        }
+        if (change is SettingsChange.FrontendExportNow || change is SettingsChange.FrontendDir) {
+            scope.launch {
+                val count = withContext(Dispatchers.IO) {
+                    if (change is SettingsChange.FrontendDir) FrontendExport.setDir(context, change.path)
+                    FrontendExport.sync(context)
+                }
+                reload()
+                state = state.copy(
+                    message = if (change is SettingsChange.FrontendDir && change.path == null) "Frontend shortcuts removed."
+                    else exportMessage(count, FrontendExport.dir(context)?.path),
+                )
+            }
+            return@SettingsScreen
+        }
         if (change is SettingsChange.Import) {
             importingInto = change.store
             picker.launch(arrayOf("application/*", "*/*"))
@@ -156,7 +199,8 @@ internal fun SettingsRoute(onBack: () -> Unit) {
                     is SettingsChange.ProtonLog -> Settings.setProtonLog(context, change.on)
                     is SettingsChange.ClientAllCores -> Settings.setClientAllCores(context, change.on)
                     is SettingsChange.OnScreen -> Settings.setOnScreenController(context, change.on)
-                    is SettingsChange.Import -> {}
+                    is SettingsChange.Import, SettingsChange.FrontendPick, SettingsChange.FrontendExportNow,
+                    is SettingsChange.FrontendDir -> {}
                 }
             }
             state = state.copy(message = null)
@@ -259,6 +303,33 @@ internal fun SettingsScreen(state: SettingsState, onBack: () -> Unit, onChange: 
             ) { onChange(SettingsChange.ClientAllCores(it)) }
         }
 
+        item { Section("Frontends") }
+        item {
+            val dir = state.frontendDir
+            SettingCard(
+                "Shortcuts for Daijishō, Cocoon and ES-DE",
+                if (dir == null) {
+                    "Writes a shortcut for every installed game, plus a Daijishō platform file (Cocoon imports it too), " +
+                        "so a frontend can start games straight into SteamOS. Kept up to date whenever SteamOS Lite reads its library."
+                } else {
+                    "Exporting to $dir. Import the platform file there into Daijishō or Cocoon; the README beside it has ES-DE's setup."
+                },
+            ) {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    if (dir == null) {
+                        Button(onClick = { onChange(SettingsChange.FrontendDir(FrontendExport.suggestedDir().path)) }) {
+                            Text("Export to ROMs/steamos")
+                        }
+                        OutlinedButton(onClick = { onChange(SettingsChange.FrontendPick) }) { Text("Choose folder…") }
+                    } else {
+                        Button(onClick = { onChange(SettingsChange.FrontendExportNow) }) { Text("Export now") }
+                        OutlinedButton(onClick = { onChange(SettingsChange.FrontendPick) }) { Text("Change folder…") }
+                        OutlinedButton(onClick = { onChange(SettingsChange.FrontendDir(null)) }) { Text("Stop exporting") }
+                    }
+                }
+            }
+        }
+
         item { Section("Controls") }
         item {
             Toggle(
@@ -340,4 +411,10 @@ private fun ComponentChoice(store: ComponentStore, pick: ComponentPick, detail: 
             }
         },
     ) { onChange(SettingsChange.Component(store, it)) }
+}
+
+private fun exportMessage(count: Int?, dir: String?) = when {
+    count == null -> "Could not write to ${dir ?: "the folder"}. Allow SteamOS Lite storage access, or pick another folder."
+    count == 1 -> "1 game exported to $dir."
+    else -> "$count games exported to $dir."
 }

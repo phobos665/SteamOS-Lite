@@ -62,6 +62,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.steamoslite.frontend.FrontendExport
 import com.steamoslite.games.InstalledGame
 import com.steamoslite.games.SteamLibrary
 import com.steamoslite.runtime.InstallService
@@ -162,7 +163,11 @@ private fun Home(resumeCount: Int, onLaunch: (String?) -> Unit, onOpenProtons: (
     }
     val ready = state is RuntimeState.Ready
     val games by produceState(initialValue = emptyList<InstalledGame>(), resumeCount, ready) {
-        if (ready) value = withContext(Dispatchers.IO) { SteamLibrary.installedGames(context) }
+        if (ready) value = withContext(Dispatchers.IO) {
+            // Frontends' shortcuts follow the library: games installed or removed in the last
+            // session are added or dropped here (nothing happens while exporting is off).
+            SteamLibrary.installedGames(context).also { FrontendExport.sync(context, it) }
+        }
     }
 
     val hasLogs by produceState(initialValue = false, resumeCount) {
