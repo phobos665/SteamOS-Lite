@@ -55,9 +55,13 @@ object SteamLibrary {
      * directory per app (sometimes with the image one level further down); older ones used flat
      * <appid>_library_600x900.jpg names.
      */
-    private fun cover(root: File, appId: String): File? {
+    private fun cover(root: File, appId: String) = art(root, appId, listOf("library_600x900", "library_capsule", "header"))
+
+    /** The wide banner the client shows at the top of a game's page, if it has cached one. */
+    fun hero(context: Context, appId: String) = art(steamRoot(context), appId, listOf("library_hero", "header"))
+
+    private fun art(root: File, appId: String, preferred: List<String>): File? {
         val cache = File(root, "appcache/librarycache")
-        val preferred = listOf("library_600x900", "library_capsule", "header")
         val perApp = File(cache, appId)
         if (perApp.isDirectory) {
             val files = perApp.walkTopDown().maxDepth(2).filter { it.isFile }.toList()

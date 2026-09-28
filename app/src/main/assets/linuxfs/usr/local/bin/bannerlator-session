@@ -307,15 +307,21 @@ BUSCONF
     # client's interface has come up at least once - a freshly downloaded client still takes its
     # first update, and without it may not start at all. The stamp is written the first time
     # steamwebhelper (the interface) runs.
+    # The switch itself is steam.cfg beside the client, Valve's documented way to hold its bootstrapper
+    # (GameNative does the same); the command-line flags are kept as a second line of defence. Only
+    # a steam.cfg this script wrote is ever removed.
     started_stamp=$steam_root/package/bannerlator-client-started
+    steam_cfg=$steam_root/steam.cfg
+    ours_cfg=$'BootStrapperInhibitAll=Enable\nBootStrapperForceSelfUpdate=False'
     update_args=()
-    if [ "${BL_STEAM_UPDATES:-1}" = 0 ]; then
-      if [ -f "$started_stamp" ]; then
-        update_args=(-nobootstrapupdate -noverifyfiles)
-        step "Steam updates off: skipping the client's update check"
-      else
+    if [ "${BL_STEAM_UPDATES:-1}" = 0 ] && [ -f "$started_stamp" ]; then
+      printf '%s\n' "$ours_cfg" > "$steam_cfg"
+      update_args=(-nobootstrapupdate -noverifyfiles)
+      step "Steam updates off: skipping the client's update check"
+    else
+      [ -f "$steam_cfg" ] && [ "$(cat "$steam_cfg")" = "$ours_cfg" ] && rm -f "$steam_cfg"
+      [ "${BL_STEAM_UPDATES:-1}" = 0 ] && \
         step "Steam updates off, but the client has not finished its first start; updating this once"
-      fi
     fi
     if [ ! -f "$started_stamp" ]; then
       (

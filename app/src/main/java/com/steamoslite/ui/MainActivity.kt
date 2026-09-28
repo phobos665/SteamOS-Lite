@@ -41,7 +41,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.Icons
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.darkColorScheme
@@ -100,6 +99,8 @@ class MainActivity : ComponentActivity() {
     private var resumeCount by mutableStateOf(0)
     private var showProtons by mutableStateOf(false)
     private var showSettings by mutableStateOf(false)
+    /** The game whose page is open (long press on its tile, or Y / Menu on a pad). */
+    private var detailsFor by mutableStateOf<InstalledGame?>(null)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -112,7 +113,20 @@ class MainActivity : ComponentActivity() {
                 when {
                     showProtons -> ProtonsRoute(onBack = { showProtons = false })
                     showSettings -> SettingsRoute(onBack = { showSettings = false })
-                    else -> Home(resumeCount, ::launch, onOpenProtons = { showProtons = true }, onOpenSettings = { showSettings = true })
+                    detailsFor != null -> detailsFor?.let { game ->
+                        GameDetailsRoute(
+                            game,
+                            onBack = { detailsFor = null },
+                            onPlay = { launch(game.appId) },
+                            onPin = if (HomeShortcuts.supported(this)) ({ pin(game) }) else null,
+                        )
+                    }
+                    else -> Home(
+                        resumeCount, ::launch,
+                        onOpenProtons = { showProtons = true },
+                        onOpenSettings = { showSettings = true },
+                        onOpenDetails = { detailsFor = it },
+                    )
                 }
             }
         }
@@ -121,6 +135,12 @@ class MainActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         resumeCount++
+    }
+
+    private fun pin(game: InstalledGame) {
+        if (!HomeShortcuts.pin(this, game)) {
+            Toast.makeText(this, "The home screen did not accept the shortcut.", Toast.LENGTH_LONG).show()
+        }
     }
 
     private fun launch(appId: String?) {
@@ -149,7 +169,13 @@ internal sealed interface RuntimeState {
 
 /** Home's state and actions: the runtime check, the install, and the installed-games scan. */
 @Composable
-private fun Home(resumeCount: Int, onLaunch: (String?) -> Unit, onOpenProtons: () -> Unit, onOpenSettings: () -> Unit) {
+private fun Home(
+    resumeCount: Int,
+    onLaunch: (String?) -> Unit,
+    onOpenProtons: () -> Unit,
+    onOpenSettings: () -> Unit,
+    onOpenDetails: (InstalledGame) -> Unit,
+) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var state by remember { mutableStateOf<RuntimeState>(RuntimeState.Checking) }
@@ -206,11 +232,7 @@ private fun Home(resumeCount: Int, onLaunch: (String?) -> Unit, onOpenProtons: (
         },
         onLaunch = onLaunch,
         onShareLogs = if (hasLogs) ({ LogShare.share(context) }) else null,
-        onPinGame = if (HomeShortcuts.supported(context)) ({ game ->
-            if (!HomeShortcuts.pin(context, game)) {
-                Toast.makeText(context, "The home screen did not accept the shortcut.", Toast.LENGTH_LONG).show()
-            }
-        }) else null,
+        onOpenDetails = onOpenDetails,
         onOpenProtons = onOpenProtons,
         onOpenSettings = onOpenSettings,
     )
@@ -229,8 +251,8 @@ internal fun HomeScreen(
     onShareLogs: (() -> Unit)? = null,
     /** Opens the compatibility-tools screen; null hides the button. */
     onOpenProtons: (() -> Unit)? = null,
-    /** Pins a game to the launcher's home screen; null leaves that out of the game menu. */
-    onPinGame: ((InstalledGame) -> Unit)? = null,
+    /** Opens a game's page (long press or Y / Menu on its tile); null leaves that out. */
+    onOpenDetails: ((InstalledGame) -> Unit)? = null,
     /** Opens the settings screen; null hides the cog. */
     onOpenSettings: (() -> Unit)? = null,
     coverOf: @Composable (InstalledGame) -> Bitmap? = { loadCover(it) },
@@ -253,7 +275,7 @@ internal fun HomeScreen(
             }
         }
         if (state is RuntimeState.Ready) {
-            Library(state, games, layout, title, onLaunch, { state.update?.let(onInstall) }, onShareLogs, onOpenProtons, onPinGame, coverOf)
+            Library(state, games, layout, title, onLaunch, { state.update?.let(onInstall) }, onShareLogs, onOpenProtons, onOpenDetails, coverOf)
         } else {
             Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(layout.padding)) {
                 title()
@@ -334,35 +356,9 @@ private fun Library(
     onUpdate: () -> Unit,
     onShareLogs: (() -> Unit)?,
     onOpenProtons: (() -> Unit)?,
-    onPinGame: ((InstalledGame) -> Unit)?,
+    onOpenDetails: ((InstalledGame) -> Unit)?,
     coverOf: @Composable (InstalledGame) -> Bitmap?,
 ) {
-    // The game whose menu is open (long press, or Y / Menu on a pad).
-    var menuFor by remember { mutableStateOf<InstalledGame?>(null) }
-    menuFor?.let { game ->
-        AlertDialog(
-            onDismissRequest = { menuFor = null },
-            title = { Text(game.name) },
-            text = { Text("Add it to the home screen to start it straight into SteamOS from there.") },
-            confirmButton = {
-                FocusedButton("Play", requestFocus = true) {
-                    menuFor = null
-                    onLaunch(game.appId)
-                }
-            },
-            dismissButton = {
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    if (onPinGame != null) {
-                        OutlinedButton(onClick = {
-                            menuFor = null
-                            onPinGame(game)
-                        }) { Text("Add to home screen") }
-                    }
-                    OutlinedButton(onClick = { menuFor = null }) { Text("Close") }
-                }
-            },
-        )
-    }
     val full: LazyGridItemSpanScope.() -> GridItemSpan = { GridItemSpan(maxLineSpan) }
     LazyVerticalGrid(
         columns = GridCells.Adaptive(layout.tileWidth),
@@ -391,7 +387,7 @@ private fun Library(
             )
         }
         items(games, key = { it.appId }) { game ->
-            GameCard(game, coverOf(game), onMenu = { menuFor = game }) { onLaunch(game.appId) }
+            GameCard(game, coverOf(game), onMenu = { onOpenDetails?.invoke(game) }) { onLaunch(game.appId) }
         }
     }
 }

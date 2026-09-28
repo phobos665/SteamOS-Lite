@@ -131,6 +131,31 @@ class Screenshots {
         home(RuntimeState.Ready("r9", null), shareLogs = true)
     }
 
+    @Test fun game_details() = paparazzi.snapshot {
+        val game = games[0].first
+        fun ach(i: Int, unlocked: Boolean, hidden: Boolean = false) = com.steamoslite.util.SteamFiles.Achievement(
+            "ACH_$i", listOf("First Steps", "Frontier Scout", "Long Haul", "Night Owl", "Completionist")[i],
+            listOf("Finish the prologue.", "Map every outpost.", "Travel 1,000 km.", "Play after midnight.", "Earn every other achievement.")[i],
+            hidden, unlocked, if (unlocked) 1_758_000_000L + i * 86_400L else 0L, null, null,
+        )
+        AppTheme {
+            GameDetailsScreen(
+                game,
+                com.steamoslite.games.GameDetails(
+                    game, null,
+                    com.steamoslite.util.SteamFiles.Playtime(754, 1_758_900_000),
+                    com.steamoslite.util.SteamFiles.AppInfo("Aurora Frontier", "Northlight", "Northlight", 1_700_000_000, 88, 3, "full", 92),
+                    listOf(ach(0, true), ach(1, true), ach(2, false), ach(3, false, hidden = true), ach(4, false)),
+                ),
+                com.steamoslite.games.StoreDetails(
+                    "Chart a frozen frontier with your crew, one outpost at a time.", listOf("Adventure", "Exploration"), emptyList(),
+                ),
+                onBack = {}, onPlay = {}, onPin = {},
+                image = { _, _ -> null },
+            )
+        }
+    }
+
     @Test fun library_update_available() = home(RuntimeState.Ready("r8", release))
 
     @Test fun library_empty() = home(RuntimeState.Ready("r9", null), withGames = false)
