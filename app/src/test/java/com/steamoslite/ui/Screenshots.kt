@@ -68,6 +68,7 @@ class Screenshots {
                 onLaunch = {},
                 onShareLogs = if (shareLogs) ({}) else null,
                 onOpenProtons = if (shareLogs) ({}) else null,
+                steamUpdates = if (shareLogs) true else null,
                 coverOf = { covers[it.appId] },
             )
         }

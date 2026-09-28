@@ -64,6 +64,7 @@ import com.steamoslite.games.SteamLibrary
 import com.steamoslite.runtime.InstallService
 import com.steamoslite.runtime.InstallStatus
 import com.steamoslite.runtime.RuntimeInstaller
+import com.steamoslite.runtime.SteamSettings
 import com.steamoslite.util.LogShare
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -158,6 +159,7 @@ private fun Home(resumeCount: Int, onLaunch: (String?) -> Unit, onOpenProtons: (
         if (ready) value = withContext(Dispatchers.IO) { SteamLibrary.installedGames(context) }
     }
 
+    var steamUpdates by remember { mutableStateOf(SteamSettings.updates(context)) }
     val hasLogs by produceState(initialValue = false, resumeCount) {
         value = withContext(Dispatchers.IO) { LogShare.hasLogs(context) }
     }
@@ -178,6 +180,11 @@ private fun Home(resumeCount: Int, onLaunch: (String?) -> Unit, onOpenProtons: (
         onLaunch = onLaunch,
         onShareLogs = if (hasLogs) ({ LogShare.share(context) }) else null,
         onOpenProtons = onOpenProtons,
+        steamUpdates = steamUpdates,
+        onSteamUpdates = { on ->
+            steamUpdates = on
+            scope.launch { withContext(Dispatchers.IO) { SteamSettings.setUpdates(context, on) } }
+        },
     )
 }
 
@@ -194,6 +201,9 @@ internal fun HomeScreen(
     onShareLogs: (() -> Unit)? = null,
     /** Opens the compatibility-tools screen; null hides the button. */
     onOpenProtons: (() -> Unit)? = null,
+    /** Whether Steam updates itself at start; null hides the switch. */
+    steamUpdates: Boolean? = null,
+    onSteamUpdates: (Boolean) -> Unit = {},
     coverOf: @Composable (InstalledGame) -> Bitmap? = { loadCover(it) },
 ) {
     Column(Modifier.fillMaxSize().padding(24.dp)) {
@@ -208,7 +218,7 @@ internal fun HomeScreen(
                 Spacer(Modifier.height(12.dp))
                 FocusedButton("Try again", onClick = onRetry)
             }
-            is RuntimeState.Ready -> Library(state, games, onLaunch, { state.update?.let(onInstall) }, onShareLogs, onOpenProtons, coverOf)
+            is RuntimeState.Ready -> Library(state, games, onLaunch, { state.update?.let(onInstall) }, onShareLogs, onOpenProtons, steamUpdates, onSteamUpdates, coverOf)
         }
     }
 }
@@ -249,6 +259,8 @@ private fun Library(
     onUpdate: () -> Unit,
     onShareLogs: (() -> Unit)?,
     onOpenProtons: (() -> Unit)?,
+    steamUpdates: Boolean?,
+    onSteamUpdates: (Boolean) -> Unit,
     coverOf: @Composable (InstalledGame) -> Bitmap?,
 ) {
     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -261,10 +273,24 @@ private fun Library(
             Spacer(Modifier.width(16.dp))
             OutlinedButton(onClick = onOpenProtons) { Text("Compatibility tools") }
         }
+        if (steamUpdates != null) {
+            Spacer(Modifier.width(16.dp))
+            OutlinedButton(onClick = { onSteamUpdates(!steamUpdates) }) {
+                Text(if (steamUpdates) "Steam updates: on" else "Steam updates: off")
+            }
+        }
         if (onShareLogs != null) {
             Spacer(Modifier.width(16.dp))
             OutlinedButton(onClick = onShareLogs) { Text("Share logs") }
         }
+    }
+    if (steamUpdates == false) {
+        Spacer(Modifier.height(8.dp))
+        Text(
+            "Steam starts without checking for its own updates. Turn them back on if Steam asks for a " +
+                "newer version or something stops working.",
+            color = Color.Gray, fontSize = 13.sp,
+        )
     }
     Spacer(Modifier.height(24.dp))
     if (games.isEmpty()) {

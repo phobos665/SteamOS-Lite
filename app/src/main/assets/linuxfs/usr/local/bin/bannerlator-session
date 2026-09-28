@@ -302,10 +302,37 @@ BUSCONF
     # falls through to the host, and the guest shell dies on libreadline before the game is reached.
     # FEX_ROOTFS names it outright and is read whatever the config situation.
     [ -d /usr/share/guestos/fex-mesa ] && export FEX_ROOTFS=/usr/share/guestos/fex-mesa
+    # Steam updates can be turned off in the app: the client then skips its update check and the
+    # verification of its own files, which it otherwise does at every start. Only honoured once the
+    # client's interface has come up at least once - a freshly downloaded client still takes its
+    # first update, and without it may not start at all. The stamp is written the first time
+    # steamwebhelper (the interface) runs.
+    started_stamp=$steam_root/package/bannerlator-client-started
+    update_args=()
+    if [ "${BL_STEAM_UPDATES:-1}" = 0 ]; then
+      if [ -f "$started_stamp" ]; then
+        update_args=(-nobootstrapupdate -noverifyfiles)
+        step "Steam updates off: skipping the client's update check"
+      else
+        step "Steam updates off, but the client has not finished its first start; updating this once"
+      fi
+    fi
+    if [ ! -f "$started_stamp" ]; then
+      (
+        for _ in $(seq 1 900); do
+          # Not a bare "steamwebhelper": that would also match the core-pinning loop's own pgrep.
+          if pgrep -f '[/]steamwebhelper|^steamwebhelper' >/dev/null 2>&1; then
+            mkdir -p "$(dirname "$started_stamp")" && date > "$started_stamp"
+            break
+          fi
+          sleep 2
+        done
+      ) &
+    fi
     # The client exits 42 when it has updated itself and wants a fresh start (steam.sh does this).
     while :; do
       step "starting the Steam client"
-      "$steam_root/steamrtarm64/steam" -gamepadui -clientbeta publicbeta \
+      "$steam_root/steamrtarm64/steam" -gamepadui -clientbeta publicbeta "${update_args[@]}" \
         -no-cef-sandbox -cef-force-gpu -cef-ozone-platform=x11 \
         -cef-use-gl=angle -cef-use-angle=vulkan "$@"
       rc=$?

@@ -128,6 +128,8 @@ class Session(
         guest += "BL_DXVK_ROOT=" + Dxvk.prepare(context, listOf(Dxvk.selected(context))).path
         guest += "BL_DXVK=" + Dxvk.selected(context)
         mark("chosen FEXCore and DXVK ready")
+        // 0 starts the client without its update check and file verification.
+        guest += "BL_STEAM_UPDATES=" + if (SteamSettings.updates(context)) "1" else "0"
         LinuxRuntime.vulkanIcd(context)?.let { guest += "VK_ICD_FILENAMES=" + it.path }
         FakeInputWriter.getRingEnv(fakeInputDir).takeIf { it.isNotEmpty() }?.let { guest += "FAKE_EVDEV_MEMFD_PATHS=$it" }
         guest += LinuxRuntime.SESSION_SCRIPT
