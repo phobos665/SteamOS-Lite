@@ -46,12 +46,13 @@ abstract class ComponentStore(val kind: String) {
     }
 
     /**
-     * Unpacks the bundled versions not unpacked yet, so any of them can also be picked for one game
-     * with a Steam launch option. Returns the directory the guest reads them from.
+     * Unpacks the bundled [versions] not unpacked yet (all of them by default, so any can also be
+     * picked for one game with a Steam launch option). Returns the directory the guest reads them from.
      */
-    fun prepare(context: Context): File {
+    @Synchronized
+    fun prepare(context: Context, versions: Collection<String> = bundled(context)): File {
         val root = root(context)
-        for (version in bundled(context)) {
+        for (version in bundled(context).filter { it in versions }) {
             val dir = File(root, version)
             if (isComplete(dir)) continue
             val staging = File(root, ".$version")

@@ -11,7 +11,7 @@ mode=${1:-desktop}
 shift || true
 # One line per milestone, greppable as "== STEP", so a first run reads as a narrative rather than
 # something to be reconstructed from Steam's own chatter. The app shows these while it waits.
-step() { echo "== STEP $(date -u +%H:%M:%S) $*"; }
+step() { echo "== STEP $(date -u +%H:%M:%S.%3N) $*"; }
 if [ -n "${BL_LOG:-}" ] && [ -z "${BL_INSIDE:-}" ]; then
   mkdir -p "$(dirname "$BL_LOG")" 2>/dev/null
   # The client alone writes megabytes an hour; one earlier log is kept, not every session's.
@@ -66,6 +66,7 @@ export XDG_CACHE_HOME=${XDG_CACHE_HOME:-$HOME/.cache}
 mkdir -p "$XDG_DATA_HOME" "$XDG_CONFIG_HOME" "$XDG_CACHE_HOME"
 
 if [ -z "${BL_INSIDE:-}" ]; then
+  step "session script running"
   # The compositor may still be starting, and a socket left by an earlier session is not
   # a compositor: probe until a connection succeeds.
   for _ in $(seq 1 100); do
@@ -84,6 +85,7 @@ if [ -z "${BL_INSIDE:-}" ]; then
     args+=(-r "$BL_REFRESH")
   fi
   [ "$mode" = steam ] && args+=(-e)
+  step "starting gamescope"
   export BL_INSIDE=1
   exec gamescope "${args[@]}" -- "$0" "$mode" "$@"
 fi
@@ -136,6 +138,7 @@ case $mode in
     esac
     ;;
   steam)
+    step "gamescope up, running the session inside it"
     step "checking the Steam client (first run downloads it, ~1-2 min with nothing on screen)"
     bannerlator-steam-install || exit $?
     step "Steam client ready"
@@ -199,6 +202,7 @@ case $mode in
     # Steam runs a game's shared redistributables inside its prefix on first launch; marking
     # them as already run keeps those x86 installers from starting under emulation at all.
     bannerlator-seed-redists "$steam_root" || true
+    step "redistributables seeded"
     # The compatibility tool runs Valve's arm64 Proton, which the client fetches like any depot.
     # Asked for on the command line the first time, so a Windows title has it before it is needed.
     if [ ! -f "$steam_root/steamapps/appmanifest_4427310.acf" ]; then
@@ -281,7 +285,7 @@ BUSCONF
       if [ -S /run/dbus/system_bus_socket ]; then
         bannerlator-netmanager &
         netmanager=$!
-        echo "== network: system bus up, NetworkManager stand-in running"
+        step "network: system bus up, NetworkManager stand-in starting"
       else
         echo "== network: the system bus did not come up; the client will show no connection"
       fi

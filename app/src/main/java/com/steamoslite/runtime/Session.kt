@@ -35,6 +35,11 @@ class Session(
     private val network = NetworkLink(this.context, root)
     private var process: SessionProcess? = null
 
+    /** Told of each setup step as it finishes, for the startup timeline. */
+    var onMark: (String) -> Unit = {}
+
+    private fun mark(what: String) = onMark(what)
+
     /** Where the session's log goes; the folder to hand over when something goes wrong. */
     var logDir: File? = null
         private set
@@ -45,6 +50,7 @@ class Session(
 
         // Refreshed every session, so what runs is always what this APK carries.
         TarZstd.extractAsset(context, "pulseaudio.tzst", PulseAudio.workingDir(context))
+        mark("audio modules unpacked")
         stageSessionFiles()
         // Android has no /dev/shm; a cache directory stands in and keeps whatever a session leaves
         // (the client abandons tens of megabytes of streams every run). Cleared before each start.
@@ -112,12 +118,16 @@ class Session(
         // FEXCore for games: the Proton launchers swap the chosen version's DLLs into the game's
         // prefix, or put Proton's own back when none is chosen. A launch option can override it per
         // game (BL_FEXCORE=2605 %command%, or BL_FEXCORE=proton).
-        guest += "BL_FEXCORE_ROOT=" + FexCore.prepare(context).path
+        // Only the chosen versions are unpacked before the session starts (the first start after
+        // an install would otherwise unpack ~220 MB first); the rest follow in the background and
+        // are needed no sooner than a game launch that names one.
+        guest += "BL_FEXCORE_ROOT=" + FexCore.prepare(context, listOf(FexCore.selected(context))).path
         guest += "BL_FEXCORE=" + FexCore.selected(context)
         // DXVK the same way, by running Proton from a mirror of its tree (Proton reinstalls its own
         // DXVK into the prefix at every start). Per game: BL_DXVK=2.6.1-gplasync %command%.
-        guest += "BL_DXVK_ROOT=" + Dxvk.prepare(context).path
+        guest += "BL_DXVK_ROOT=" + Dxvk.prepare(context, listOf(Dxvk.selected(context))).path
         guest += "BL_DXVK=" + Dxvk.selected(context)
+        mark("chosen FEXCore and DXVK ready")
         LinuxRuntime.vulkanIcd(context)?.let { guest += "VK_ICD_FILENAMES=" + it.path }
         FakeInputWriter.getRingEnv(fakeInputDir).takeIf { it.isNotEmpty() }?.let { guest += "FAKE_EVDEV_MEMFD_PATHS=$it" }
         guest += LinuxRuntime.SESSION_SCRIPT
@@ -134,14 +144,25 @@ class Session(
         // not look for there on its own.
         LinuxRuntime.prootLibraryPath(context).takeIf { it.isNotEmpty() }?.let { hostEnv["LD_LIBRARY_PATH"] = it }
 
+        Thread({
+            try {
+                FexCore.prepare(context)
+                Dxvk.prepare(context)
+            } catch (e: Exception) {
+                Log.w(TAG, "could not unpack the bundled FEXCore/DXVK versions", e)
+            }
+        }, "UnpackComponents").apply { priority = Thread.MIN_PRIORITY }.start()
+        mark("session files staged")
         network.publish()
         network.start()
         pulse.start()
+        mark("network link and audio started")
         process = SessionProcess(command, hostEnv, root, File(logs, "proot.log")) { status ->
             Log.i(TAG, "session ended: $status")
             stopServices()
             onExit(status)
         }.also { it.start() }
+        mark("proot started")
         Log.i(TAG, "session started" + (appId?.let { " for app $it" } ?: "") + ", log: $logs")
     }
 

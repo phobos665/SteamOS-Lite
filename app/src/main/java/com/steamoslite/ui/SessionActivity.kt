@@ -44,6 +44,7 @@ class SessionActivity : Activity() {
     private lateinit var onScreen: OnScreenController
     private lateinit var controllers: Controllers
     private var session: Session? = null
+    private lateinit var timeline: StartupTimeline
     private var compositorStarted = false
     @Volatile private var ending = false
     private val main = Handler(Looper.getMainLooper())
@@ -64,6 +65,8 @@ class SessionActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        timeline = StartupTimeline(intent.getLongExtra(EXTRA_TAPPED_AT, System.currentTimeMillis()))
+        timeline.mark("session screen created")
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         // The keyboard slides over the picture; resizing the surface would resize gamescope's output.
         window.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_NOTHING)
@@ -103,6 +106,7 @@ class SessionActivity : Activity() {
                 if (!compositorStarted) {
                     compositorStarted = true
                     startCompositor(holder)
+                    timeline.mark("compositor started")
                     startSession()
                 } else {
                     WaylandCompositor.nativeSetSurface(holder.surface)
@@ -134,10 +138,12 @@ class SessionActivity : Activity() {
         val s = Session(this, appId, OUTPUT_WIDTH, OUTPUT_HEIGHT, refreshHz()) { status ->
             main.post { finishSession("Steam exited ($status)") }
         }
+        s.onMark = { timeline.mark(it) }
         session = s
         thread(name = "SessionStart") {
             try {
                 s.start()
+                timeline.mark("session started (proot and the session script running)")
                 s.logDir?.let { watchProgress(File(it, "session.log")) }
             } catch (e: Exception) {
                 Log.e(TAG, "session did not start", e)
@@ -196,17 +202,26 @@ class SessionActivity : Activity() {
             try {
                 session.newLines().mapNotNull { line ->
                     val at = line.indexOf("== STEP ")
-                    if (at < 0) null else line.substring(at + 8).substringAfter(' ').trim()
+                    if (at < 0) return@mapNotNull null
+                    val rest = line.substring(at + 8)
+                    rest.substringAfter(' ').trim().also { timeline.step(rest.substringBefore(' '), it) }
                 }.lastOrNull()?.let {
                     step = it
                     detail = ""
                     if (it.startsWith("starting the Steam client") && !clientStarted) {
                         clientStarted = true
-                        main.post { status.setOnClickListener { status.visibility = View.GONE } }
+                        main.post {
+                            status.setOnClickListener {
+                                timeline.mark("loading screen dismissed with a tap")
+                                status.visibility = View.GONE
+                            }
+                        }
                     }
                 }
                 if (clientStarted) {
-                    bootstrap.newLines().lastOrNull { it.isNotBlank() }?.let {
+                    val fresh = bootstrap.newLines()
+                    fresh.filter { it.startsWith("[") }.forEach(timeline::bootstrap)
+                    fresh.lastOrNull { it.isNotBlank() }?.let {
                         // "[2026-09-27 12:00:00] Downloading update (12,345 of 665,432 KB)..."
                         detail = it.substringAfter("] ").trim()
                     }
@@ -214,8 +229,13 @@ class SessionActivity : Activity() {
             } catch (_: Exception) {}
 
             if (clientStarted && steamInterfaceRunning()) {
-                if (helperSeenAt == 0L) helperSeenAt = System.currentTimeMillis()
+                if (helperSeenAt == 0L) {
+                    helperSeenAt = System.currentTimeMillis()
+                    timeline.mark("steamwebhelper (Steam's interface) running")
+                }
                 if (System.currentTimeMillis() - helperSeenAt >= 5000) {
+                    timeline.mark("loading screen hidden")
+                    timeline.write(session?.logDir)
                     main.post { status.visibility = View.GONE }
                     return
                 }
@@ -357,6 +377,8 @@ class SessionActivity : Activity() {
         if (ending) return
         ending = true
         message?.let { Log.i(TAG, it) }
+        timeline.mark("session ended" + (message?.let { ": $it" } ?: ""))
+        timeline.write(session?.logDir)
         thread(name = "SessionStop") {
             session?.stop()
             controllers.stop()
@@ -421,6 +443,7 @@ class SessionActivity : Activity() {
             text = "Starting SteamOS…"
         }
         const val EXTRA_APP_ID = "app_id"
+        const val EXTRA_TAPPED_AT = "tapped_at"
         private const val PREF_ON_SCREEN = "onScreenController"
         /** gamescope's size. The client's interface is the most expensive thing it draws: 720p. */
         const val OUTPUT_WIDTH = 1280

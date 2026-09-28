@@ -101,6 +101,7 @@ class MainActivity : ComponentActivity() {
     private fun launch(appId: String?) {
         startActivity(Intent(this, SessionActivity::class.java).apply {
             if (appId != null) putExtra(SessionActivity.EXTRA_APP_ID, appId)
+            putExtra(SessionActivity.EXTRA_TAPPED_AT, System.currentTimeMillis())
         })
     }
 }
