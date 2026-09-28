@@ -197,6 +197,12 @@ class SessionActivity : Activity() {
         var detail = ""
         var clientStarted = false
         var helperSeenAt = 0L
+        // Launched for one game: Steam boots its whole interface before it acts on the rungameid
+        // link, so the loading screen stays until the game itself is running rather than dropping
+        // onto Big Picture's home while the game is still being prepared.
+        val appId = intent.getStringExtra(EXTRA_APP_ID)
+        var launchSeenAt = 0L
+        var gameSeenAt = 0L
         while (!ending) {
             Thread.sleep(1000)
             try {
@@ -233,9 +239,30 @@ class SessionActivity : Activity() {
                     helperSeenAt = System.currentTimeMillis()
                     timeline.mark("steamwebhelper (Steam's interface) running")
                 }
-                if (System.currentTimeMillis() - helperSeenAt >= 5000) {
+                val now = System.currentTimeMillis()
+                val ready = if (appId == null) {
+                    now - helperSeenAt >= 5000
+                } else {
+                    val game = gameProgress(appId)
+                    if (game >= GAME_LAUNCHING && launchSeenAt == 0L) {
+                        launchSeenAt = now
+                        timeline.mark("Steam launching app $appId")
+                        step = "Steam is starting the game"
+                    }
+                    if (game >= GAME_RUNNING && gameSeenAt == 0L) {
+                        gameSeenAt = now
+                        timeline.mark("game process running")
+                        step = "The game is starting"
+                    }
+                    // A game whose window is on the way; a native Linux game, which has no .exe to
+                    // see; or Steam waiting on something the user has to see (an update, a dialog).
+                    (gameSeenAt > 0 && now - gameSeenAt >= 3000) ||
+                        (launchSeenAt > 0 && now - launchSeenAt >= 30_000) ||
+                        now - helperSeenAt >= 120_000
+                }
+                if (ready) {
                     timeline.mark("loading screen hidden")
-                    timeline.write(session?.logDir)
+                    timeline.write(this@SessionActivity.session?.logDir)
                     main.post { status.visibility = View.GONE }
                     return
                 }
@@ -244,7 +271,7 @@ class SessionActivity : Activity() {
             }
 
             val text = buildString {
-                append("Starting SteamOS…")
+                append(if (appId == null) "Starting SteamOS…" else "Starting your game…")
                 if (step.isNotEmpty()) append("\n\n").append(step)
                 if (detail.isNotEmpty()) append("\n").append(detail)
                 if (clientStarted) {
@@ -254,6 +281,25 @@ class SessionActivity : Activity() {
             }
             main.post { if (status.visibility == View.VISIBLE) status.text = text }
         }
+    }
+
+    /**
+     * How far a launch of [appId] has got: GAME_LAUNCHING once Steam's reaper runs it
+     * ("SteamLaunch AppId=<id>"), GAME_RUNNING once a Windows program outside Wine's own system
+     * folders is running, which is the game (or its launcher).
+     */
+    private fun gameProgress(appId: String): Int {
+        var progress = 0
+        for (p in File("/proc").listFiles() ?: return 0) {
+            if (p.name.firstOrNull()?.isDigit() != true) continue
+            val args = try {
+                File(p, "cmdline").readBytes().toString(Charsets.UTF_8).split('\u0000')
+            } catch (_: Exception) { continue }
+            if (args.any { it == "AppId=$appId" }) progress = maxOf(progress, GAME_LAUNCHING)
+            val exe = args.firstOrNull().orEmpty().lowercase()
+            if (exe.endsWith(".exe") && ":\\" in exe && "\\windows\\" !in exe) return GAME_RUNNING
+        }
+        return progress
     }
 
     /** True while a steamwebhelper process - Steam's interface - is alive in the session. */
@@ -444,6 +490,8 @@ class SessionActivity : Activity() {
         }
         const val EXTRA_APP_ID = "app_id"
         const val EXTRA_TAPPED_AT = "tapped_at"
+        private const val GAME_LAUNCHING = 1
+        private const val GAME_RUNNING = 2
         private const val PREF_ON_SCREEN = "onScreenController"
         /** gamescope's size. The client's interface is the most expensive thing it draws: 720p. */
         const val OUTPUT_WIDTH = 1280
