@@ -195,18 +195,19 @@ case $mode in
       ) &
     fi
 
-    step "registering the app's game library with Steam"
-    bannerlator-steam-library "$steam_root" || true
-    # The app's non-Steam shortcuts go in while the client is down (it rewrites shortcuts.vdf
-    # itself), and before the registrar, which maps their ids to our Proton.
-    step "writing the app's shortcuts into the Steam library"
-    bannerlator-steam-shortcuts "$steam_root" || true
-    step "setting up the ARM64 Proton compatibility tool"
-    bannerlator-steam-compat "$steam_root" || true
-    # Steam runs a game's shared redistributables inside its prefix on first launch; marking
-    # them as already run keeps those x86 installers from starting under emulation at all.
-    bannerlator-seed-redists "$steam_root" || true
-    step "redistributables seeded"
+    # The client's files are set up by separate helpers that each write their own file, so they run
+    # side by side: each Python start costs seconds under proot. The app's non-Steam shortcuts go
+    # in while the client is down (it rewrites shortcuts.vdf itself), and before the registrar,
+    # which maps their ids to our Proton. Steam runs a game's shared redistributables inside its
+    # prefix on first launch; the seeder marks them as already run so those x86 installers never
+    # start under emulation.
+    step "preparing the client: library, shortcuts, compatibility tool, redistributables"
+    bannerlator-steam-library "$steam_root" & prep=$!
+    { bannerlator-steam-shortcuts "$steam_root"; bannerlator-steam-compat "$steam_root"; } & prep="$prep $!"
+    bannerlator-seed-redists "$steam_root" & prep="$prep $!"
+    # Only these: the core-pinning loop above is a background job too, and runs for an hour.
+    wait $prep
+    step "client prepared"
     # The compatibility tool runs Valve's arm64 Proton, which the client fetches like any depot.
     # Asked for on the command line the first time, so a Windows title has it before it is needed.
     if [ ! -f "$steam_root/steamapps/appmanifest_4427310.acf" ]; then
