@@ -235,6 +235,18 @@ struct surface {
     struct wl_list pending_frames;
     struct wl_list pending_feedback;        /* wp_presentation feedback asked for before commit */
 
+    /* A synchronized subsurface's committed state, held until its parent's commit applies it
+     * (wl_subsurface): the same fields as the pending ones above. */
+    int has_cache;
+    struct wl_resource *cached_buffer;
+    struct wl_listener cached_buffer_destroy;
+    int cached_attach;
+    int cached_src_set, cached_dst_set;
+    float cached_src[4];
+    int cached_dst[2];
+    struct wl_list cached_frames;
+    struct wl_list cached_feedback;
+
     /* Current content. */
     struct vkp_image *shm_img;              /* our copy of the last wl_shm buffer */
     struct wl_resource *dmabuf;             /* current dmabuf wl_buffer (NULL once the client destroyed it) */
@@ -700,6 +712,13 @@ static void on_pending_buffer_destroyed(struct wl_listener *l, void *data) {
     s->pending_buffer = NULL;
 }
 
+static void on_cached_buffer_destroyed(struct wl_listener *l, void *data) {
+    struct surface *s = wl_container_of(l, s, cached_buffer_destroy);
+    wl_list_remove(&s->cached_buffer_destroy.link);
+    wl_list_init(&s->cached_buffer_destroy.link);
+    s->cached_buffer = NULL;
+}
+
 static void fire_frames(struct wl_list *frames) {
     struct wl_resource *cb, *tmp;
     uint32_t t;
@@ -943,8 +962,134 @@ static void surface_set_opaque(struct wl_client *c, struct wl_resource *r,
 static void surface_set_input(struct wl_client *c, struct wl_resource *r,
                               struct wl_resource *region) {}
 
+/* ---- synchronized subsurfaces
+ * gamescope shows the game and each overlay (Steam's notifications, the achievement pop-up, the
+ * performance overlay) as its own synchronized subsurface: it attaches to every plane and commits
+ * its toplevel last, so a change of layout reaches the screen as one frame. Applying each plane's
+ * commit as it arrived let a redraw fall between them - the game plane already cleared, its
+ * replacement not attached yet - and the toplevel's black base showed through: the screen blinked
+ * black whenever an overlay came or went. Such a commit is now held (cached) and applied with the
+ * parent's, as wl_subsurface specifies. */
+static int effectively_sync(struct surface *s) {
+    for (; s->parent; s = s->parent)
+        if (s->sub_sync) return 1;
+    return 0;
+}
+
+static void swap_lists(struct wl_list *a, struct wl_list *b) {
+    struct wl_list t;
+    wl_list_init(&t);
+    wl_list_insert_list(&t, a);
+    wl_list_init(a);
+    wl_list_insert_list(a, b);
+    wl_list_init(b);
+    wl_list_insert_list(b, &t);
+}
+
+/* Exchanges the pending and cached state, so apply_commit can apply the cached one. */
+static void swap_pending_cached(struct surface *s) {
+    struct wl_resource *pb = s->pending_buffer, *cb = s->cached_buffer;
+    wl_list_remove(&s->pending_buffer_destroy.link);
+    wl_list_init(&s->pending_buffer_destroy.link);
+    wl_list_remove(&s->cached_buffer_destroy.link);
+    wl_list_init(&s->cached_buffer_destroy.link);
+    s->pending_buffer = cb;
+    s->cached_buffer = pb;
+    if (cb) {
+        s->pending_buffer_destroy.notify = on_pending_buffer_destroyed;
+        wl_resource_add_destroy_listener(cb, &s->pending_buffer_destroy);
+    }
+    if (pb) {
+        s->cached_buffer_destroy.notify = on_cached_buffer_destroyed;
+        wl_resource_add_destroy_listener(pb, &s->cached_buffer_destroy);
+    }
+    int t = s->pending_attach; s->pending_attach = s->cached_attach; s->cached_attach = t;
+    t = s->pending_src_set; s->pending_src_set = s->cached_src_set; s->cached_src_set = t;
+    t = s->pending_dst_set; s->pending_dst_set = s->cached_dst_set; s->cached_dst_set = t;
+    float src[4];
+    memcpy(src, s->pending_src, sizeof(src));
+    memcpy(s->pending_src, s->cached_src, sizeof(src));
+    memcpy(s->cached_src, src, sizeof(src));
+    int dst[2];
+    memcpy(dst, s->pending_dst, sizeof(dst));
+    memcpy(s->pending_dst, s->cached_dst, sizeof(dst));
+    memcpy(s->cached_dst, dst, sizeof(dst));
+    swap_lists(&s->pending_frames, &s->cached_frames);
+    swap_lists(&s->pending_feedback, &s->cached_feedback);
+}
+
+/* A commit of an effectively synchronized subsurface: its pending state joins the cache. */
+static void cache_pending(struct surface *s) {
+    if (s->pending_attach) {
+        /* A newer buffer replaces one that never reached the screen: that one is free again. */
+        if (s->cached_attach && s->cached_buffer && s->cached_buffer != s->pending_buffer &&
+            s->cached_buffer != s->dmabuf)
+            wl_buffer_send_release(s->cached_buffer);
+        feedback_discard_all(&s->cached_feedback);
+        wl_list_remove(&s->cached_buffer_destroy.link);
+        wl_list_init(&s->cached_buffer_destroy.link);
+        s->cached_buffer = s->pending_buffer;
+        if (s->cached_buffer) {
+            s->cached_buffer_destroy.notify = on_cached_buffer_destroyed;
+            wl_resource_add_destroy_listener(s->cached_buffer, &s->cached_buffer_destroy);
+        }
+        s->cached_attach = 1;
+        wl_list_remove(&s->pending_buffer_destroy.link);
+        wl_list_init(&s->pending_buffer_destroy.link);
+        s->pending_buffer = NULL;
+        s->pending_attach = 0;
+    }
+    if (s->pending_src_set) {
+        s->cached_src_set = 1;
+        memcpy(s->cached_src, s->pending_src, sizeof(s->cached_src));
+        s->pending_src_set = 0;
+    }
+    if (s->pending_dst_set) {
+        s->cached_dst_set = 1;
+        memcpy(s->cached_dst, s->pending_dst, sizeof(s->cached_dst));
+        s->pending_dst_set = 0;
+    }
+    wl_list_insert_list(s->cached_frames.prev, &s->pending_frames);
+    wl_list_init(&s->pending_frames);
+    wl_list_insert_list(s->cached_feedback.prev, &s->pending_feedback);
+    wl_list_init(&s->pending_feedback);
+    s->has_cache = 1;
+}
+
+static void apply_commit(struct surface *s);
+
+/* Applies what a subsurface cached, leaving whatever the client has pending since untouched. */
+static void apply_cached(struct surface *s) {
+    if (!s->has_cache) return;
+    s->has_cache = 0;
+    swap_pending_cached(s);
+    apply_commit(s);
+    swap_pending_cached(s);
+}
+
+/* The cache of a surface that stops being a subsurface: nothing will apply it now. */
+static void drop_cached(struct surface *s) {
+    wl_list_remove(&s->cached_buffer_destroy.link);
+    wl_list_init(&s->cached_buffer_destroy.link);
+    if (s->cached_attach && s->cached_buffer && s->cached_buffer != s->dmabuf)
+        wl_buffer_send_release(s->cached_buffer);
+    s->cached_buffer = NULL;
+    s->cached_attach = s->cached_src_set = s->cached_dst_set = 0;
+    fire_frames(&s->cached_frames);
+    feedback_discard_all(&s->cached_feedback);
+    s->has_cache = 0;
+}
+
 static void surface_commit(struct wl_client *c, struct wl_resource *r) {
     struct surface *s = wl_resource_get_user_data(r);
+    if (effectively_sync(s)) {
+        cache_pending(s);
+        return;
+    }
+    apply_commit(s);
+}
+
+static void apply_commit(struct surface *s) {
     struct surface *child;
 
     if (s->pending_src_set) {
@@ -1001,6 +1146,9 @@ static void surface_commit(struct wl_client *c, struct wl_resource *r) {
             child->sub_pending = 0;
         }
     }
+    /* ...and so is whatever the synchronized ones committed in the meantime (their own
+     * synchronized children follow from inside). */
+    wl_list_for_each(child, &s->children, child_link) apply_cached(child);
 
     wl_list_insert_list(s->frames.prev, &s->pending_frames);
     wl_list_init(&s->pending_frames);
@@ -1076,6 +1224,9 @@ static void surface_resource_destroy(struct wl_resource *r) {
         child->parent = NULL;
     }
     if (s->pending_buffer) wl_list_remove(&s->pending_buffer_destroy.link);
+    wl_list_remove(&s->cached_buffer_destroy.link);
+    wl_resource_for_each_safe(cb, cbtmp, &s->cached_frames) wl_resource_destroy(cb);
+    feedback_discard_all(&s->cached_feedback);
     pending_releases_forget_surface(s);
     drop_dmabuf(s, 0);
     ahb_swapchain_surface_gone(s);
@@ -1136,6 +1287,9 @@ static void compositor_create_surface(struct wl_client *c, struct wl_resource *r
     wl_list_init(&s->child_link);
     wl_list_init(&s->toplevel_link);
     wl_list_init(&s->pending_buffer_destroy.link);
+    wl_list_init(&s->cached_frames);
+    wl_list_init(&s->cached_feedback);
+    wl_list_init(&s->cached_buffer_destroy.link);
     wl_list_insert(&g_surfaces, &s->link);
     wl_resource_set_implementation(s->resource, &surface_impl, s, surface_resource_destroy);
 }
@@ -1195,7 +1349,10 @@ static void subsurface_set_sync(struct wl_client *c, struct wl_resource *r) {
 }
 static void subsurface_set_desync(struct wl_client *c, struct wl_resource *r) {
     struct surface *s = wl_resource_get_user_data(r);
-    if (s) s->sub_sync = 0;
+    if (!s) return;
+    s->sub_sync = 0;
+    /* No longer waiting on the parent: what it cached is applied as a commit would be. */
+    if (!effectively_sync(s)) apply_cached(s);
 }
 static const struct wl_subsurface_interface subsurface_impl = {
     .destroy = subsurface_destroy,
@@ -1209,6 +1366,7 @@ static void subsurface_resource_destroy(struct wl_resource *r) {
     struct surface *s = wl_resource_get_user_data(r);
     if (!s) return;
     detach_from_parent(s);
+    drop_cached(s);
     s->subsurface = NULL;
     s->role = ROLE_NONE;
     s->has_content = 0;
