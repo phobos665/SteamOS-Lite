@@ -68,7 +68,7 @@ class Screenshots {
                 onLaunch = {},
                 onShareLogs = if (shareLogs) ({}) else null,
                 onOpenProtons = if (shareLogs) ({}) else null,
-                steamUpdates = if (shareLogs) true else null,
+                onOpenSettings = {},
                 coverOf = { covers[it.appId] },
             )
         }
@@ -98,11 +98,23 @@ class Screenshots {
                             "CachyOS's build, heavily patched for performance.", 339_912_088, "cachyos --tag cachyos-11.0-20260703-slr"),
                     ),
                     catalogLoading = false,
-                    fex = ComponentPick(listOf("2507", "2508", "2511", "2512", "2601", "2603", "2604", "2605"), selected = "2605"),
-                    dxvk = ComponentPick(listOf("1.11.1-sarek", "2.4.1-gplasync", "2.6.1-gplasync", "async-1.10.3")),
                 ),
                 onBack = {}, onImport = {}, onInstall = {}, onCancel = {}, onRemove = {},
             )
+        }
+    }
+
+    @Test fun settings() = paparazzi.snapshot {
+        AppTheme {
+            SettingsScreen(
+                SettingsState(
+                    nativeResolution = com.steamoslite.runtime.Settings.Resolution(1920, 1080),
+                    refreshRates = listOf(120, 90, 60),
+                    fex = ComponentPick(listOf("2507", "2508", "2511", "2512", "2601", "2603", "2604", "2605"), selected = "2605"),
+                    dxvk = ComponentPick(listOf("1.11.1-sarek", "2.4.1-gplasync", "2.6.1-gplasync", "async-1.10.3")),
+                ),
+                onBack = {},
+            ) {}
         }
     }
 

@@ -20,6 +20,7 @@ import android.widget.TextView
 import com.steamoslite.input.Controllers
 import com.steamoslite.input.OnScreenController
 import com.steamoslite.runtime.Session
+import com.steamoslite.runtime.Settings
 import com.steamoslite.util.FileUtils
 import com.steamoslite.util.TarZstd
 import com.steamoslite.wayland.WaylandCompositor
@@ -77,7 +78,7 @@ class SessionActivity : Activity() {
         keyboard = KeyboardBridge(this)
         controllers = Controllers(this, Session.fakeInputDir(this))
         onScreen = OnScreenController(this) { controllers.setOnScreen(it) }.apply {
-            visibility = if (prefs.getBoolean(PREF_ON_SCREEN, false)) View.VISIBLE else View.GONE
+            visibility = if (Settings.onScreenController(this@SessionActivity)) View.VISIBLE else View.GONE
         }
         quickMenu = QuickMenu(this).apply {
             setItems("SteamOS", listOf(
@@ -124,7 +125,7 @@ class SessionActivity : Activity() {
         assets.open("wayland/keymap.xkb").use { i -> File(runtimeDir, "keymap.xkb").outputStream().use { i.copyTo(it) } }
         val driver = bundledDriver()
         WaylandCompositor.nativeSetOutputRefreshRate(refreshHz().toFloat())
-        WaylandCompositor.nativeSetOutputSize(OUTPUT_WIDTH, OUTPUT_HEIGHT)
+        WaylandCompositor.nativeSetOutputSize(output.width, output.height)
         WaylandCompositor.nativeStartWithSurface(
             holder.surface, runtimeDir.path, driver?.first, driver?.second, applicationInfo.nativeLibraryDir,
         )
@@ -135,7 +136,7 @@ class SessionActivity : Activity() {
         // Pads first, so Steam sees them in its very first device scan.
         controllers.start()
         val appId = intent.getStringExtra(EXTRA_APP_ID)
-        val s = Session(this, appId, OUTPUT_WIDTH, OUTPUT_HEIGHT, refreshHz()) { status ->
+        val s = Session(this, appId, output.width, output.height, refreshHz()) { status ->
             main.post { finishSession("Steam exited ($status)") }
         }
         s.onMark = { timeline.mark(it) }
@@ -402,7 +403,6 @@ class SessionActivity : Activity() {
         return super.dispatchKeyEvent(event)
     }
 
-    private val prefs by lazy { getSharedPreferences("session", MODE_PRIVATE) }
     private val onScreenShown get() = onScreen.visibility == View.VISIBLE
 
     /** Shows or hides the touch gamepad; the choice is kept for the next session. */
@@ -410,7 +410,7 @@ class SessionActivity : Activity() {
         onScreen.releaseAll()
         onScreen.visibility = if (shown) View.VISIBLE else View.GONE
         if (!shown) controllers.setOnScreen(null)
-        prefs.edit().putBoolean(PREF_ON_SCREEN, shown).apply()
+        Settings.setOnScreenController(this, shown)
     }
 
     private fun toggleKeyboard() {
@@ -460,22 +460,26 @@ class SessionActivity : Activity() {
             or View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION)
     }
 
-    /** Asks for the panel's fastest mode; gamescope and games are told the same rate. */
+    /** Asks for Settings' refresh rate (the panel's fastest by default); gamescope and games are told the same. */
     @Suppress("DEPRECATION")
     private fun pickHighestRefreshMode() {
         val display = windowManager.defaultDisplay ?: return
         val current = display.mode
+        val want = refreshHz()
         val best = display.supportedModes
             .filter { it.physicalWidth == current.physicalWidth && it.physicalHeight == current.physicalHeight }
-            .maxByOrNull { it.refreshRate } ?: return
+            .minByOrNull { Math.abs(it.refreshRate - want) } ?: return
         window.attributes = window.attributes.apply { preferredDisplayModeId = best.modeId }
     }
 
-    @Suppress("DEPRECATION")
     private fun refreshHz(): Int {
-        val display = windowManager.defaultDisplay ?: return 60
-        return display.supportedModes.maxOfOrNull { it.refreshRate }?.let { Math.round(it) } ?: 60
+        val rates = Settings.refreshRates(this)
+        val chosen = Settings.refreshChoice(this)
+        return if (chosen > 0 && chosen in rates) chosen else rates.firstOrNull() ?: 60
     }
+
+    /** gamescope's output size, from Settings. */
+    private val output by lazy { Settings.resolution(this) }
 
     companion object {
         private const val TAG = "SessionActivity"
@@ -492,9 +496,6 @@ class SessionActivity : Activity() {
         const val EXTRA_TAPPED_AT = "tapped_at"
         private const val GAME_LAUNCHING = 1
         private const val GAME_RUNNING = 2
-        private const val PREF_ON_SCREEN = "onScreenController"
         /** gamescope's size. The client's interface is the most expensive thing it draws: 720p. */
-        const val OUTPUT_WIDTH = 1280
-        const val OUTPUT_HEIGHT = 720
     }
 }

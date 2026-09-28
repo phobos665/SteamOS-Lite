@@ -30,7 +30,10 @@ import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Button
+import androidx.compose.material3.Icon
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
@@ -64,7 +67,6 @@ import com.steamoslite.games.SteamLibrary
 import com.steamoslite.runtime.InstallService
 import com.steamoslite.runtime.InstallStatus
 import com.steamoslite.runtime.RuntimeInstaller
-import com.steamoslite.runtime.SteamSettings
 import com.steamoslite.util.LogShare
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -79,6 +81,7 @@ class MainActivity : ComponentActivity() {
     /** Bumped on every resume so the list re-reads what Steam installed during the last session. */
     private var resumeCount by mutableStateOf(0)
     private var showProtons by mutableStateOf(false)
+    private var showSettings by mutableStateOf(false)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -88,8 +91,11 @@ class MainActivity : ComponentActivity() {
         }
         setContent {
             AppTheme {
-                if (showProtons) ProtonsRoute(onBack = { showProtons = false })
-                else Home(resumeCount, ::launch, onOpenProtons = { showProtons = true })
+                when {
+                    showProtons -> ProtonsRoute(onBack = { showProtons = false })
+                    showSettings -> SettingsRoute(onBack = { showSettings = false })
+                    else -> Home(resumeCount, ::launch, onOpenProtons = { showProtons = true }, onOpenSettings = { showSettings = true })
+                }
             }
         }
     }
@@ -125,7 +131,7 @@ internal sealed interface RuntimeState {
 
 /** Home's state and actions: the runtime check, the install, and the installed-games scan. */
 @Composable
-private fun Home(resumeCount: Int, onLaunch: (String?) -> Unit, onOpenProtons: () -> Unit) {
+private fun Home(resumeCount: Int, onLaunch: (String?) -> Unit, onOpenProtons: () -> Unit, onOpenSettings: () -> Unit) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var state by remember { mutableStateOf<RuntimeState>(RuntimeState.Checking) }
@@ -159,7 +165,6 @@ private fun Home(resumeCount: Int, onLaunch: (String?) -> Unit, onOpenProtons: (
         if (ready) value = withContext(Dispatchers.IO) { SteamLibrary.installedGames(context) }
     }
 
-    var steamUpdates by remember { mutableStateOf(SteamSettings.updates(context)) }
     val hasLogs by produceState(initialValue = false, resumeCount) {
         value = withContext(Dispatchers.IO) { LogShare.hasLogs(context) }
     }
@@ -180,11 +185,7 @@ private fun Home(resumeCount: Int, onLaunch: (String?) -> Unit, onOpenProtons: (
         onLaunch = onLaunch,
         onShareLogs = if (hasLogs) ({ LogShare.share(context) }) else null,
         onOpenProtons = onOpenProtons,
-        steamUpdates = steamUpdates,
-        onSteamUpdates = { on ->
-            steamUpdates = on
-            scope.launch { withContext(Dispatchers.IO) { SteamSettings.setUpdates(context, on) } }
-        },
+        onOpenSettings = onOpenSettings,
     )
 }
 
@@ -201,13 +202,22 @@ internal fun HomeScreen(
     onShareLogs: (() -> Unit)? = null,
     /** Opens the compatibility-tools screen; null hides the button. */
     onOpenProtons: (() -> Unit)? = null,
-    /** Whether Steam updates itself at start; null hides the switch. */
-    steamUpdates: Boolean? = null,
-    onSteamUpdates: (Boolean) -> Unit = {},
+    /** Opens the settings screen; null hides the cog. */
+    onOpenSettings: (() -> Unit)? = null,
     coverOf: @Composable (InstalledGame) -> Bitmap? = { loadCover(it) },
 ) {
     Column(Modifier.fillMaxSize().padding(24.dp)) {
-        Text("SteamOS Lite", fontSize = 28.sp, fontWeight = FontWeight.Bold, color = Color.White)
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("SteamOS Lite", fontSize = 28.sp, fontWeight = FontWeight.Bold, color = Color.White,
+                modifier = Modifier.weight(1f))
+            if (onOpenSettings != null) {
+                OutlinedButton(onClick = onOpenSettings) {
+                    Icon(Icons.Filled.Settings, contentDescription = null)
+                    Spacer(Modifier.width(8.dp))
+                    Text("Settings")
+                }
+            }
+        }
         Spacer(Modifier.height(16.dp))
         when (state) {
             RuntimeState.Checking -> Text("Checking…", color = Color.Gray)
@@ -218,7 +228,7 @@ internal fun HomeScreen(
                 Spacer(Modifier.height(12.dp))
                 FocusedButton("Try again", onClick = onRetry)
             }
-            is RuntimeState.Ready -> Library(state, games, onLaunch, { state.update?.let(onInstall) }, onShareLogs, onOpenProtons, steamUpdates, onSteamUpdates, coverOf)
+            is RuntimeState.Ready -> Library(state, games, onLaunch, { state.update?.let(onInstall) }, onShareLogs, onOpenProtons, coverOf)
         }
     }
 }
@@ -259,8 +269,6 @@ private fun Library(
     onUpdate: () -> Unit,
     onShareLogs: (() -> Unit)?,
     onOpenProtons: (() -> Unit)?,
-    steamUpdates: Boolean?,
-    onSteamUpdates: (Boolean) -> Unit,
     coverOf: @Composable (InstalledGame) -> Bitmap?,
 ) {
     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -273,24 +281,10 @@ private fun Library(
             Spacer(Modifier.width(16.dp))
             OutlinedButton(onClick = onOpenProtons) { Text("Compatibility tools") }
         }
-        if (steamUpdates != null) {
-            Spacer(Modifier.width(16.dp))
-            OutlinedButton(onClick = { onSteamUpdates(!steamUpdates) }) {
-                Text(if (steamUpdates) "Steam updates: on" else "Steam updates: off")
-            }
-        }
         if (onShareLogs != null) {
             Spacer(Modifier.width(16.dp))
             OutlinedButton(onClick = onShareLogs) { Text("Share logs") }
         }
-    }
-    if (steamUpdates == false) {
-        Spacer(Modifier.height(8.dp))
-        Text(
-            "Steam starts without checking for its own updates. Turn them back on if Steam asks for a " +
-                "newer version or something stops working.",
-            color = Color.Gray, fontSize = 13.sp,
-        )
     }
     Spacer(Modifier.height(24.dp))
     if (games.isEmpty()) {

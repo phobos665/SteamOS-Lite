@@ -14,7 +14,6 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
@@ -36,9 +35,6 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.steamoslite.runtime.ComponentStore
-import com.steamoslite.runtime.Dxvk
-import com.steamoslite.runtime.FexCore
 import com.steamoslite.runtime.Protons
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -54,19 +50,7 @@ internal data class ProtonsState(
     /** Bytes copied so far while an import runs, or null. */
     val importing: Long? = null,
     val message: String? = null,
-    val fex: ComponentPick = ComponentPick(),
-    val dxvk: ComponentPick = ComponentPick(),
 )
-
-/** A component's versions the app has, the imported ones among them, and the one games use. */
-internal data class ComponentPick(
-    val versions: List<String> = emptyList(),
-    val imported: List<String> = emptyList(),
-    val selected: String = ComponentStore.PROTONS_OWN,
-)
-
-private fun ComponentStore.pick(context: android.content.Context) =
-    ComponentPick(available(context), imported(context), selected(context))
 
 /** The screen with its data: reads the runtime, queues work for the next session. */
 @Composable
@@ -81,8 +65,7 @@ internal fun ProtonsRoute(onBack: () -> Unit) {
             Protons.cleanImports(context)
             Triple(Protons.valveEngines(context), Protons.installed(context), Protons.queued(context))
         }
-        val (fex, dxvk) = withContext(Dispatchers.IO) { FexCore.pick(context) to Dxvk.pick(context) }
-        state = state.copy(engines = engines, installed = installed, queued = queued, fex = fex, dxvk = dxvk)
+        state = state.copy(engines = engines, installed = installed, queued = queued)
     }
 
     LaunchedEffect(Unit) {
@@ -118,47 +101,8 @@ internal fun ProtonsRoute(onBack: () -> Unit) {
         }
     }
 
-    // The component a package is being picked for; the picker's result has no room for it.
-    var importingInto by remember { mutableStateOf<ComponentStore>(FexCore) }
-    val componentPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri: Uri? ->
-        if (uri == null) return@rememberLauncherForActivityResult
-        val store = importingInto
-        scope.launch {
-            val name = withContext(Dispatchers.IO) { Protons.displayName(context, uri) } ?: "${store.kind}.tzst"
-            if (!store.looksLikePackage(name)) {
-                state = state.copy(message = "$name is not a ${componentName(store)} package (.tzst or .wcp).")
-                return@launch
-            }
-            val result = withContext(Dispatchers.IO) { runCatching { store.import(context, uri, name) } }
-            state = state.copy(
-                message = result.fold(
-                    { componentLabel(store, it) + " imported. Choose it below to use it." },
-                    { "Could not import $name: ${it.message}" },
-                ),
-            )
-            reload()
-        }
-    }
-
     ProtonsScreen(
         state = state,
-        onSelectComponent = { store, version ->
-            scope.launch {
-                withContext(Dispatchers.IO) { store.select(context, version) }
-                state = state.copy(message = "Games use " + componentLabel(store, version) + " from the next SteamOS start.")
-                reload()
-            }
-        },
-        onImportComponent = { store ->
-            importingInto = store
-            componentPicker.launch(arrayOf("application/*", "*/*"))
-        },
-        onRemoveComponent = { store, version ->
-            scope.launch {
-                withContext(Dispatchers.IO) { store.remove(context, version) }
-                reload()
-            }
-        },
         onBack = onBack,
         onImport = { picker.launch(arrayOf("application/*", "*/*")) },
         onInstall = { build ->
@@ -193,9 +137,6 @@ internal fun ProtonsScreen(
     onInstall: (Protons.CatalogBuild) -> Unit,
     onCancel: (String) -> Unit,
     onRemove: (Protons.Installed) -> Unit,
-    onSelectComponent: (ComponentStore, String) -> Unit = { _, _ -> },
-    onImportComponent: (ComponentStore) -> Unit = {},
-    onRemoveComponent: (ComponentStore, String) -> Unit = { _, _ -> },
 ) {
     LazyColumn(Modifier.fillMaxSize().padding(24.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         item {
@@ -240,24 +181,6 @@ internal fun ProtonsScreen(
             }
         }
 
-        component(
-            FexCore, state.fex,
-            "The x86 emulator Proton runs games' Windows code with. Each Proton brings its own; choosing " +
-                "a version here swaps it into every game's prefix from its next start (a game's very first " +
-                "start always uses Proton's own). For one game only, set its launch option to " +
-                "BL_FEXCORE=2605 %command%.",
-            "libarm64ecfex.dll and libwow64fex.dll",
-            onSelectComponent, onImportComponent, onRemoveComponent,
-        )
-        component(
-            Dxvk, state.dxvk,
-            "Direct3D 8-11 on Vulkan. The bundled versions are GameNative's x86-64 builds, which run " +
-                "under FEXCore in place of Proton's native ARM64 one: try them when a game draws wrong. " +
-                "For one game only, set its launch option to BL_DXVK=2.6.1-gplasync %command%.",
-            "system32/ and syswow64/ with d3d11.dll",
-            onSelectComponent, onImportComponent, onRemoveComponent,
-        )
-
         item { Section("Add a Proton") }
         item {
             Row_("Import from a file", "A Proton build for ARM64 Linux: .tar.gz, .tar.xz or .tar.zst") {
@@ -281,12 +204,12 @@ internal fun ProtonsScreen(
 }
 
 @Composable
-private fun Section(title: String) {
+internal fun Section(title: String) {
     Text(title, color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(top = 12.dp))
 }
 
 @Composable
-private fun Row_(title: String, detail: String, action: @Composable () -> Unit) {
+internal fun Row_(title: String, detail: String, action: @Composable () -> Unit) {
     Surface(color = Color(0xFF1B2530), shape = RoundedCornerShape(10.dp), modifier = Modifier.fillMaxWidth()) {
         Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
@@ -295,49 +218,6 @@ private fun Row_(title: String, detail: String, action: @Composable () -> Unit) 
             }
             Spacer(Modifier.width(12.dp))
             action()
-        }
-    }
-}
-
-internal fun componentName(store: ComponentStore) = if (store == Dxvk) "DXVK" else "FEXCore"
-
-internal fun componentLabel(store: ComponentStore, version: String) =
-    if (version == ComponentStore.PROTONS_OWN) "Proton's own ${componentName(store)}" else componentName(store) + " " + version
-
-/** A component's section: Proton's own, each version newest first, and an import row. */
-private fun LazyListScope.component(
-    store: ComponentStore,
-    pick: ComponentPick,
-    explanation: String,
-    contents: String,
-    onSelect: (ComponentStore, String) -> Unit,
-    onImport: (ComponentStore) -> Unit,
-    onRemove: (ComponentStore, String) -> Unit,
-) {
-    val name = componentName(store)
-    item { Section(name) }
-    item { Text(explanation, color = Color.LightGray) }
-    items(listOf(ComponentStore.PROTONS_OWN) + pick.versions.reversed(), key = { store.kind + ":" + it }) { version ->
-        val current = version == pick.selected
-        Row_(
-            if (version == ComponentStore.PROTONS_OWN) "Proton's own" else "$name $version",
-            when {
-                version == ComponentStore.PROTONS_OWN -> "Whatever the game's Proton ships. The default."
-                version in pick.imported -> "Imported"
-                else -> "Bundled"
-            },
-        ) {
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                if (version in pick.imported && !current) {
-                    OutlinedButton(onClick = { onRemove(store, version) }) { Text("Remove") }
-                }
-                Button(onClick = { onSelect(store, version) }, enabled = !current) { Text(if (current) "In use" else "Use") }
-            }
-        }
-    }
-    item {
-        Row_("Import a $name", "A GameNative or Winlator package (.tzst or .wcp) with $contents") {
-            Button(onClick = { onImport(store) }) { Text("Import…") }
         }
     }
 }

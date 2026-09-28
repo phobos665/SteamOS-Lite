@@ -83,25 +83,14 @@ class Session(
             "PULSE_SERVER=unix:" + PulseAudio.socket(context).path,
             "BL_WIDTH=$width",
             "BL_HEIGHT=$height",
-            // Never capped: gamescope's rate holds for the whole session, menus included.
-            "BL_FPS=0",
+            // Settings' frame rate limit: gamescope's refresh, which holds for the whole session,
+            // menus included. 0 = the screen's rate.
+            "BL_FPS=" + Settings.fpsLimit(context),
             "BL_LOG=" + File(logs, "session.log").path,
             "BL_DEBUG_DIR=" + logs.path,
-            // Steam pins its interface to a subset of cores; the session re-pins it to all of them
-            // (measured 66 -> 90+ fps in the menus on a Pocket FIT).
-            "BL_CLIENT_CPUS=" + (0 until Runtime.getRuntime().availableProcessors()).joinToString(","),
-            // Games launched from the client run x86 code under FEX. Bannerlator's default preset
-            // (Intermediate): without store ordering, multithreaded titles can hang at load.
-            "FEX_TSOENABLED=1",
-            "FEX_VECTORTSOENABLED=0",
-            "FEX_MEMCPYSETTSOENABLED=0",
-            "FEX_HALFBARRIERTSOENABLED=1",
-            "FEX_X87REDUCEDPRECISION=1",
-            "FEX_MULTIBLOCK=1",
-            // Proton's own log of every game start (steam-<appid>.log), written straight into this
-            // session's log folder so Share logs carries it. On while games are being brought up:
-            // a launch that fails says why only here.
-            "PROTON_LOG=1",
+            // Proton's own log of every game start (steam-<appid>.log) goes straight into this
+            // session's log folder, so Share logs carries it; a launch that fails says why only
+            // there. Settings can turn it off (PROTON_LOG unset).
             "PROTON_LOG_DIR=" + logs.path,
             // Controllers: libfakeinput.so (named in /etc/ld.so.preload) serves the app's rings as
             // /dev/input/eventN, as an Xbox 360 pad Steam and SDL know without configuration.
@@ -115,6 +104,15 @@ class Session(
             "SDL_JOYSTICK_HIDAPI=0",
         )
         if (refreshHz > 1) guest += "BL_REFRESH=$refreshHz"
+        // Steam pins its interface to a subset of cores; the session re-pins it to all of them
+        // (measured 66 -> 90+ fps in the menus on a Pocket FIT) unless Settings says not to.
+        if (Settings.clientAllCores(context)) {
+            guest += "BL_CLIENT_CPUS=" + (0 until Runtime.getRuntime().availableProcessors()).joinToString(",")
+        }
+        // Games launched from the client run x86 code under FEX, with Settings' preset
+        // (Intermediate by default: without store ordering, multithreaded titles can hang at load).
+        Settings.fexPreset(context).env.forEach { (k, v) -> guest += "$k=$v" }
+        if (Settings.protonLog(context)) guest += "PROTON_LOG=1"
         // FEXCore for games: the Proton launchers swap the chosen version's DLLs into the game's
         // prefix, or put Proton's own back when none is chosen. A launch option can override it per
         // game (BL_FEXCORE=2605 %command%, or BL_FEXCORE=proton).
@@ -129,7 +127,7 @@ class Session(
         guest += "BL_DXVK=" + Dxvk.selected(context)
         mark("chosen FEXCore and DXVK ready")
         // 0 starts the client without its update check and file verification.
-        guest += "BL_STEAM_UPDATES=" + if (SteamSettings.updates(context)) "1" else "0"
+        guest += "BL_STEAM_UPDATES=" + if (Settings.steamUpdates(context)) "1" else "0"
         LinuxRuntime.vulkanIcd(context)?.let { guest += "VK_ICD_FILENAMES=" + it.path }
         FakeInputWriter.getRingEnv(fakeInputDir).takeIf { it.isNotEmpty() }?.let { guest += "FAKE_EVDEV_MEMFD_PATHS=$it" }
         guest += LinuxRuntime.SESSION_SCRIPT
