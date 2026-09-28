@@ -6,7 +6,10 @@
 #   probe   records exactly what Steam handed over (the command, the compat environment) in the
 #           session's logs, then runs it unchanged. The shortcut test uses it to show whether a
 #           shortcut went through our Proton and whether %command% was expanded at all.
-# (Store launches - Epic's per-launch sign-in arguments - are added here later.)
+#   epic <app name>
+#           adds the Epic Games sign-in arguments for this launch, which the app mints on request
+#           (its store bridge; the port and secret are in /root/.bl-store-bridge). Without the
+#           bridge the game starts anyway, as it would offline.
 mode=${1:-}
 shift || true
 case $mode in
@@ -20,6 +23,24 @@ case $mode in
       env | grep -E '^(SteamAppId|SteamGameId|STEAM_COMPAT_[A-Z_]*|STEAM_COMPAT_TOOL_PATHS|SteamOverlayGameId)=' | sort
     } >> "$log" 2>&1
     exec "$@"
+    ;;
+  epic)
+    app=${1:?app name}
+    shift
+    extra=()
+    if read -r port secret < /root/.bl-store-bridge 2>/dev/null && exec 3<>"/dev/tcp/127.0.0.1/$port"; then
+      printf '%s epic %s\n' "$secret" "$app" >&3
+      while IFS= read -r line <&3; do
+        case $line in
+          ERROR*) echo "bl-store-launch: $line" >&2; extra=(); break ;;
+        esac
+        extra+=("$line")
+      done
+      exec 3<&-
+    else
+      echo "bl-store-launch: no store bridge; starting $app without Epic sign-in" >&2
+    fi
+    exec "$@" "${extra[@]}"
     ;;
   *)
     echo "bl-store-launch: unknown mode '$mode'" >&2

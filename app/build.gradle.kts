@@ -87,6 +87,8 @@ dependencies {
     implementation("com.github.luben:zstd-jni:1.5.2-3@aar")
     // XZ for imported .wcp packages, which commons-compress reads through this library.
     implementation("org.tukaani:xz:1.9")
+    implementation("com.squareup.okhttp3:okhttp:4.12.0")
+    implementation("com.jakewharton.timber:timber:5.0.1")
 
     testImplementation("junit:junit:4.13.2")
 }

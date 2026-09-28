@@ -1,0 +1,821 @@
+package com.steamoslite.stores.epic.manifest
+
+import java.io.ByteArrayInputStream
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
+import java.security.MessageDigest
+import java.util.zip.Inflater
+import timber.log.Timber
+
+sealed class EpicManifest {
+    var headerSize: Int = 41
+    var sizeCompressed: Int = 0
+    var sizeUncompressed: Int = 0
+    var shaHash: ByteArray = ByteArray(20)
+    var storedAs: Byte = 0
+    var version: Int = 18
+    var data: ByteArray = ByteArray(0)
+
+    var meta: ManifestMeta? = null
+    var chunkDataList: ChunkDataList? = null
+    var fileManifestList: FileManifestList? = null
+    var customFields: CustomFields? = null
+
+    val isCompressed: Boolean
+        get() = (storedAs.toInt() and 0x1) != 0
+
+    companion object {
+        const val HEADER_MAGIC: UInt = 0x44BEC00Cu
+        const val DEFAULT_SERIALIZATION_VERSION = 17
+
+        fun detect(data: ByteArray): EpicManifest {
+            return if (data.size >= 4) {
+                val buffer = ByteBuffer.wrap(data).order(ByteOrder.LITTLE_ENDIAN)
+                val magic = buffer.int.toUInt()
+                if (magic == HEADER_MAGIC) {
+                    Timber.tag("Epic").i("Binary Manifest Detected!")
+                    BinaryManifest()
+                } else {
+                    Timber.tag("Epic").i("JSON Manifest Detected!")
+                    JsonManifest()
+                }
+            } else {
+                Timber.tag("Epic").i("Defaulting to JSON Manifest...")
+                JsonManifest()
+            }
+        }
+
+        fun readAll(data: ByteArray): EpicManifest {
+            val manifest = detect(data)
+            manifest.read(data)
+            manifest.parseContents()
+            return manifest
+        }
+    }
+
+    abstract fun read(data: ByteArray)
+    abstract fun parseContents()
+    abstract fun serialize(): ByteArray
+
+    fun getChunkDir(): String {
+        return when {
+            version >= 15 -> "ChunksV4"
+            version >= 6 -> "ChunksV3"
+            version >= 3 -> "ChunksV2"
+            else -> "Chunks"
+        }
+    }
+}
+
+class BinaryManifest : EpicManifest() {
+    override fun read(data: ByteArray) {
+        val input = ByteArrayInputStream(data)
+        val buffer = ByteBuffer.allocate(data.size).order(ByteOrder.LITTLE_ENDIAN)
+        buffer.put(data)
+        buffer.flip()
+
+        val magic = buffer.int.toUInt()
+        if (magic != HEADER_MAGIC) {
+            throw IllegalArgumentException("Invalid manifest header magic: 0x${magic.toString(16)}")
+        }
+
+        headerSize = buffer.int
+        sizeUncompressed = buffer.int
+        sizeCompressed = buffer.int
+        buffer.get(shaHash)
+        storedAs = buffer.get()
+        version = buffer.int
+
+        if (buffer.position() != headerSize) {
+            buffer.position(headerSize)
+        }
+
+        val bodyData = ByteArray(buffer.remaining())
+        buffer.get(bodyData)
+
+        this.data = if (isCompressed) {
+            val inflater = Inflater()
+            inflater.setInput(bodyData)
+            val decompressed = ByteArray(sizeUncompressed)
+            val resultLength = inflater.inflate(decompressed)
+            inflater.end()
+
+            if (resultLength != sizeUncompressed) {
+                throw IllegalStateException("Manifest decompression size mismatch: expected $sizeUncompressed, got $resultLength")
+            }
+
+            val md = MessageDigest.getInstance("SHA-1")
+            val computedHash = md.digest(decompressed)
+            if (!computedHash.contentEquals(shaHash)) {
+                throw IllegalStateException("Manifest hash mismatch!")
+            }
+
+            decompressed
+        } else {
+            bodyData
+        }
+    }
+
+    override fun parseContents() {
+        val buffer = ByteBuffer.wrap(data).order(ByteOrder.LITTLE_ENDIAN)
+
+        meta = ManifestMeta.read(buffer)
+        chunkDataList = ChunkDataList.read(buffer, meta?.featureLevel ?: version)
+        fileManifestList = FileManifestList.read(buffer)
+        customFields = CustomFields.read(buffer)
+
+        data = ByteArray(0)
+    }
+
+    private fun estimateBodySize(): Int {
+        var size = 0
+
+        meta?.let { size += 10000 }
+
+        chunkDataList?.let { size += it.elements.size * 57 + 1000 }
+
+        fileManifestList?.let { fml ->
+            size += fml.elements.sumOf { fm ->
+                fm.filename.length + fm.symlinkTarget.length + 100 +
+                fm.installTags.sumOf { it.length + 4 } +
+                fm.chunkParts.size * 28
+            }
+        }
+
+        customFields?.let { size += 1000 }
+        return maxOf(size, 256 * 1024)
+    }
+
+    override fun serialize(): ByteArray {
+        val bodyStream = java.io.ByteArrayOutputStream()
+
+        val targetVersion = maxOf(DEFAULT_SERIALIZATION_VERSION, meta?.featureLevel ?: version)
+            .coerceAtMost(21)
+
+        meta?.featureLevel = targetVersion
+
+        val bodyBuffer = ByteBuffer.allocate(estimateBodySize()).order(ByteOrder.LITTLE_ENDIAN)
+
+        fun flushAndReset() {
+            if (bodyBuffer.position() > 0) {
+                bodyStream.write(bodyBuffer.array(), 0, bodyBuffer.position())
+                bodyBuffer.clear()
+            }
+        }
+
+        fun ensureSpace(needed: Int) {
+            if (bodyBuffer.remaining() < needed) flushAndReset()
+        }
+
+        meta?.let { m ->
+            ensureSpace(10_000)
+            m.write(bodyBuffer)
+        }
+
+        chunkDataList?.let { cdl ->
+            ensureSpace(cdl.elements.size * 57 + 1_000)
+            cdl.write(bodyBuffer, targetVersion)
+        }
+
+        fileManifestList?.let { fml ->
+            val needed = fml.elements.sumOf {
+                it.filename.length + it.symlinkTarget.length + 100 +
+                it.installTags.sumOf { t -> t.length + 4 } +
+                it.chunkParts.size * 28
+            }
+            ensureSpace(needed + 1_000)
+            fml.write(bodyBuffer)
+        }
+
+        customFields?.let {
+            ensureSpace(2_000)
+            it.write(bodyBuffer)
+        }
+
+        flushAndReset()
+
+        val uncompressedData = bodyStream.toByteArray()
+
+        val compressedData = java.io.ByteArrayOutputStream()
+        java.util.zip.DeflaterOutputStream(compressedData).use { it.write(uncompressedData) }
+        val compressed = compressedData.toByteArray()
+
+        val sha = MessageDigest.getInstance("SHA-1").digest(uncompressedData)
+
+        val headerBuffer = ByteBuffer.allocate(41).order(ByteOrder.LITTLE_ENDIAN)
+        headerBuffer.putInt(HEADER_MAGIC.toInt())
+        headerBuffer.putInt(41)
+        headerBuffer.putInt(uncompressedData.size)
+        headerBuffer.putInt(compressed.size)
+        headerBuffer.put(sha)
+        headerBuffer.put(0x01.toByte())
+        headerBuffer.putInt(targetVersion)
+
+        val result = ByteArray(41 + compressed.size)
+        System.arraycopy(headerBuffer.array(), 0, result, 0, 41)
+        System.arraycopy(compressed, 0, result, 41, compressed.size)
+        return result
+    }
+}
+
+class JsonManifest : EpicManifest() {
+    override fun read(data: ByteArray) {
+        this.data = data
+        storedAs = 0
+    }
+
+    override fun parseContents() {
+        val parsedManifest = JsonManifestParser.parse(data)
+
+        this.version = parsedManifest.version
+        this.headerSize = parsedManifest.headerSize
+        this.storedAs = parsedManifest.storedAs
+        this.meta = parsedManifest.meta
+        this.chunkDataList = parsedManifest.chunkDataList
+        this.fileManifestList = parsedManifest.fileManifestList
+        this.customFields = parsedManifest.customFields
+
+        this.data = ByteArray(0)
+    }
+
+    override fun serialize(): ByteArray {
+        val binary = BinaryManifest()
+        binary.version = this.version
+        binary.meta = this.meta
+        binary.chunkDataList = this.chunkDataList
+        binary.fileManifestList = this.fileManifestList
+        binary.customFields = this.customFields
+        return binary.serialize()
+    }
+}
+
+data class ManifestMeta(
+    var metaSize: Int = 0,
+    var dataVersion: Byte = 0,
+    var featureLevel: Int = 18,
+    var isFileData: Boolean = false,
+    var appId: Int = 0,
+    var appName: String = "",
+    var buildVersion: String = "",
+    var launchExe: String = "",
+    var launchCommand: String = "",
+    var prereqIds: List<String> = emptyList(),
+    var prereqName: String = "",
+    var prereqPath: String = "",
+    var prereqArgs: String = "",
+    var uninstallActionPath: String = "",
+    var uninstallActionArgs: String = "",
+    var buildId: String = ""
+) {
+    companion object {
+        fun read(buffer: ByteBuffer): ManifestMeta {
+            val meta = ManifestMeta()
+            val startPos = buffer.position()
+
+            meta.metaSize = buffer.int
+            meta.dataVersion = buffer.get()
+            meta.featureLevel = buffer.int
+            meta.isFileData = buffer.get() == 1.toByte()
+            meta.appId = buffer.int
+            meta.appName = readFString(buffer)
+            meta.buildVersion = readFString(buffer)
+            meta.launchExe = readFString(buffer)
+            meta.launchCommand = readFString(buffer)
+
+            val prereqCount = buffer.int
+            meta.prereqIds = List(prereqCount) { readFString(buffer) }
+
+            meta.prereqName = readFString(buffer)
+            meta.prereqPath = readFString(buffer)
+            meta.prereqArgs = readFString(buffer)
+
+            if (meta.dataVersion >= 1) {
+                meta.buildId = readFString(buffer)
+            }
+
+            if (meta.dataVersion >= 2) {
+                meta.uninstallActionPath = readFString(buffer)
+                meta.uninstallActionArgs = readFString(buffer)
+            }
+
+            val bytesRead = buffer.position() - startPos
+            if (bytesRead != meta.metaSize) {
+                buffer.position(startPos + meta.metaSize)
+            }
+
+            return meta
+        }
+    }
+
+    fun write(buffer: ByteBuffer) {
+        val startPos = buffer.position()
+
+        val sizePos = buffer.position()
+        buffer.putInt(0)
+
+        buffer.put(dataVersion)
+        buffer.putInt(featureLevel)
+        buffer.put(if (isFileData) 1.toByte() else 0.toByte())
+        buffer.putInt(appId)
+        writeFString(buffer, appName)
+        writeFString(buffer, buildVersion)
+        writeFString(buffer, launchExe)
+        writeFString(buffer, launchCommand)
+
+        buffer.putInt(prereqIds.size)
+        prereqIds.forEach { writeFString(buffer, it) }
+
+        writeFString(buffer, prereqName)
+        writeFString(buffer, prereqPath)
+        writeFString(buffer, prereqArgs)
+
+        if (dataVersion >= 1) {
+            writeFString(buffer, buildId)
+        }
+
+        if (dataVersion >= 2) {
+            writeFString(buffer, uninstallActionPath)
+            writeFString(buffer, uninstallActionArgs)
+        }
+
+        val endPos = buffer.position()
+        val size = endPos - startPos
+        buffer.putInt(sizePos, size)
+    }
+}
+
+data class ChunkDataList(
+    var version: Byte = 0,
+    var size: Int = 0,
+    var count: Int = 0,
+    val elements: MutableList<ChunkInfo> = mutableListOf(),
+    private var manifestVersion: Int = 18
+) {
+    private val guidMap: MutableMap<String, Int> by lazy {
+        elements.mapIndexed { index, chunk -> chunk.guidStr to index }.toMap(mutableMapOf())
+    }
+
+    private val guidIntMap: MutableMap<Pair<ULong, ULong>, Int> by lazy {
+        elements.mapIndexed { index, chunk -> chunk.guidNum to index }.toMap(mutableMapOf())
+    }
+
+    fun getChunkByGuid(guid: String): ChunkInfo? {
+        return guidMap[guid.lowercase()]?.let { elements[it] }
+    }
+
+    fun getChunkByGuidNum(guidNum: Pair<ULong, ULong>): ChunkInfo? {
+        return guidIntMap[guidNum]?.let { elements[it] }
+    }
+
+    companion object {
+        fun read(buffer: ByteBuffer, manifestVersion: Int): ChunkDataList {
+            val cdl = ChunkDataList(manifestVersion = manifestVersion)
+            val startPos = buffer.position()
+
+            cdl.size = buffer.int
+            cdl.version = buffer.get()
+            cdl.count = buffer.int
+
+            repeat(cdl.count) {
+                cdl.elements.add(ChunkInfo(manifestVersion = manifestVersion))
+            }
+
+            cdl.elements.forEach { chunk ->
+                chunk.guid = intArrayOf(buffer.int, buffer.int, buffer.int, buffer.int)
+            }
+
+            cdl.elements.forEach { chunk ->
+                chunk.hash = buffer.long.toULong()
+            }
+
+            cdl.elements.forEach { chunk ->
+                buffer.get(chunk.shaHash)
+            }
+
+            cdl.elements.forEach { chunk ->
+                chunk.groupNum = buffer.get().toInt() and 0xFF
+            }
+
+            cdl.elements.forEach { chunk ->
+                chunk.windowSize = buffer.int
+            }
+
+            cdl.elements.forEach { chunk ->
+                chunk.fileSize = buffer.long
+            }
+
+            val bytesRead = buffer.position() - startPos
+            if (bytesRead != cdl.size) {
+                buffer.position(startPos + cdl.size)
+            }
+
+            return cdl
+        }
+    }
+
+    fun write(buffer: ByteBuffer, manifestVersion: Int) {
+        val startPos = buffer.position()
+
+        val sizePos = buffer.position()
+        buffer.putInt(0)
+
+        buffer.put(version)
+        buffer.putInt(elements.size)
+
+        elements.forEach { chunk ->
+            chunk.guid.forEach { buffer.putInt(it) }
+        }
+
+        elements.forEach { chunk ->
+            buffer.putLong(chunk.hash.toLong())
+        }
+
+        elements.forEach { chunk ->
+            buffer.put(chunk.shaHash)
+        }
+
+        elements.forEach { chunk ->
+            buffer.put(chunk.groupNum.toByte())
+        }
+
+        elements.forEach { chunk ->
+            buffer.putInt(chunk.windowSize)
+        }
+
+        elements.forEach { chunk ->
+            buffer.putLong(chunk.fileSize)
+        }
+
+        val endPos = buffer.position()
+        val size = endPos - startPos
+        buffer.putInt(sizePos, size)
+    }
+}
+
+data class ChunkInfo(
+    var guid: IntArray = IntArray(4),
+    var hash: ULong = 0u,
+    var shaHash: ByteArray = ByteArray(20),
+    var groupNum: Int = 0,
+    var windowSize: Int = 0,
+    var fileSize: Long = 0,
+    var useHashPrefixForV3: Boolean = false,
+    private val manifestVersion: Int = 18
+) {
+    val guidStr: String by lazy {
+        guid.joinToString("-") { "%08x".format(it) }
+    }
+
+    val guidNum: Pair<ULong, ULong> by lazy {
+        val high = (guid[0].toULong() shl 32) or guid[1].toULong()
+        val low = (guid[2].toULong() shl 32) or guid[3].toULong()
+        Pair(high, low)
+    }
+
+    fun getPath(chunkDir: String = getChunkDir(manifestVersion)): String {
+        val guidHex = guid.joinToString("") { "%08X".format(it) }
+        val hashHex = hash.toString(16).uppercase().padStart(16, '0')
+        val subfolder = when (chunkDir) {
+            "ChunksV3" -> {
+                if (useHashPrefixForV3) hashHex.substring(0, 2) else "%02d".format(groupNum)
+            }
+            else -> "%02d".format(groupNum)
+        }
+        return "$chunkDir/$subfolder/${hashHex}_$guidHex.chunk"
+    }
+
+    companion object {
+        private fun getChunkDir(version: Int): String {
+            Timber.tag("EpicManifest").i("Found Manifest version: $version")
+            return when {
+                version >= 15 -> "ChunksV4"
+                version >= 6 -> "ChunksV3"
+                version >= 3 -> "ChunksV2"
+                else -> "Chunks"
+            }
+        }
+    }
+
+    override fun equals(other: Any?): Boolean {
+        if (this === other) return true
+        if (javaClass != other?.javaClass) return false
+        other as ChunkInfo
+        return guid.contentEquals(other.guid)
+    }
+
+    override fun hashCode(): Int {
+        return guid.contentHashCode()
+    }
+}
+
+data class FileManifestList(
+    var version: Byte = 0,
+    var size: Int = 0,
+    var count: Int = 0,
+    val elements: MutableList<FileManifest> = mutableListOf()
+) {
+    companion object {
+        fun read(buffer: ByteBuffer): FileManifestList {
+            val fml = FileManifestList()
+            val startPos = buffer.position()
+
+            fml.size = buffer.int
+            fml.version = buffer.get()
+            fml.count = buffer.int
+
+            repeat(fml.count) {
+                fml.elements.add(FileManifest())
+            }
+
+            fml.elements.forEach { fm ->
+                fm.filename = readFString(buffer)
+            }
+
+            fml.elements.forEach { fm ->
+                fm.symlinkTarget = readFString(buffer)
+            }
+
+            fml.elements.forEach { fm ->
+                buffer.get(fm.hash)
+            }
+
+            fml.elements.forEach { fm ->
+                fm.flags = buffer.get().toInt() and 0xFF
+            }
+
+            fml.elements.forEach { fm ->
+                val tagCount = buffer.int
+                fm.installTags = List(tagCount) { readFString(buffer) }
+            }
+
+            fml.elements.forEach { fm ->
+                val partCount = buffer.int
+                var fileOffset = 0L
+
+                repeat(partCount) {
+                    val partStartPos = buffer.position()
+                    val partSize = buffer.int
+
+                    val part = ChunkPart(
+                        guid = intArrayOf(buffer.int, buffer.int, buffer.int, buffer.int),
+                        offset = buffer.int,
+                        size = buffer.int,
+                        fileOffset = fileOffset
+                    )
+
+                    fm.chunkParts.add(part)
+                    fileOffset += part.size.toLong()
+
+                    val partBytesRead = buffer.position() - partStartPos
+                    if (partBytesRead < partSize) {
+                        buffer.position(partStartPos + partSize)
+                    }
+                }
+
+                fm.fileSize = fileOffset
+            }
+
+            if (fml.version >= 1) {
+                fml.elements.forEach { fm ->
+                    val hasMd5 = buffer.int
+                    if (hasMd5 != 0) {
+                        buffer.get(fm.hashMd5)
+                    }
+                }
+
+                fml.elements.forEach { fm ->
+                    fm.mimeType = readFString(buffer)
+                }
+            }
+
+            if (fml.version >= 2) {
+                fml.elements.forEach { fm ->
+                    buffer.get(fm.hashSha256)
+                }
+            }
+
+            val bytesRead = buffer.position() - startPos
+            if (bytesRead != fml.size) {
+                buffer.position(startPos + fml.size)
+            }
+
+            return fml
+        }
+    }
+
+    fun write(buffer: ByteBuffer) {
+        val startPos = buffer.position()
+
+        val sizePos = buffer.position()
+        buffer.putInt(0)
+
+        buffer.put(version)
+        buffer.putInt(elements.size)
+
+        elements.forEach { fm ->
+            writeFString(buffer, fm.filename)
+        }
+
+        elements.forEach { fm ->
+            writeFString(buffer, fm.symlinkTarget)
+        }
+
+        elements.forEach { fm ->
+            buffer.put(fm.hash)
+        }
+
+        elements.forEach { fm ->
+            buffer.put(fm.flags.toByte())
+        }
+
+        elements.forEach { fm ->
+            buffer.putInt(fm.installTags.size)
+            fm.installTags.forEach { tag -> writeFString(buffer, tag) }
+        }
+
+        elements.forEach { fm ->
+            buffer.putInt(fm.chunkParts.size)
+
+            fm.chunkParts.forEach { part ->
+                val partStartPos = buffer.position()
+
+                val partSizePos = buffer.position()
+                buffer.putInt(0)
+
+                part.guid.forEach { buffer.putInt(it) }
+                buffer.putInt(part.offset)
+                buffer.putInt(part.size)
+
+                val partEndPos = buffer.position()
+                val partSize = partEndPos - partStartPos
+                buffer.putInt(partSizePos, partSize)
+            }
+        }
+
+        if (version >= 1) {
+            elements.forEach { fm ->
+                val hasMd5 = if (fm.hashMd5.any { it != 0.toByte() }) 1 else 0
+                buffer.putInt(hasMd5)
+                if (hasMd5 != 0) {
+                    buffer.put(fm.hashMd5)
+                }
+            }
+
+            elements.forEach { fm ->
+                writeFString(buffer, fm.mimeType)
+            }
+        }
+
+        if (version >= 2) {
+            elements.forEach { fm ->
+                buffer.put(fm.hashSha256)
+            }
+        }
+
+        val endPos = buffer.position()
+        val size = endPos - startPos
+        buffer.putInt(sizePos, size)
+    }
+}
+
+data class FileManifest(
+    var filename: String = "",
+    var symlinkTarget: String = "",
+    var hash: ByteArray = ByteArray(20),
+    var flags: Int = 0,
+    var installTags: List<String> = emptyList(),
+    var chunkParts: MutableList<ChunkPart> = mutableListOf(),
+    var fileSize: Long = 0,
+    var hashMd5: ByteArray = ByteArray(16),
+    var mimeType: String = "",
+    var hashSha256: ByteArray = ByteArray(32)
+) {
+    val isReadOnly: Boolean get() = (flags and 0x1) != 0
+    val isCompressed: Boolean get() = (flags and 0x2) != 0
+    val isExecutable: Boolean get() = (flags and 0x4) != 0
+
+    override fun equals(other: Any?): Boolean {
+        if (this === other) return true
+        if (javaClass != other?.javaClass) return false
+        other as FileManifest
+        return filename == other.filename
+    }
+
+    override fun hashCode(): Int {
+        return filename.hashCode()
+    }
+}
+
+data class ChunkPart(
+    val guid: IntArray,
+    val offset: Int,
+    val size: Int,
+    val fileOffset: Long
+) {
+    val guidStr: String by lazy {
+        guid.joinToString("-") { "%08x".format(it) }
+    }
+
+    override fun equals(other: Any?): Boolean {
+        if (this === other) return true
+        if (javaClass != other?.javaClass) return false
+        other as ChunkPart
+        return guid.contentEquals(other.guid) && offset == other.offset
+    }
+
+    override fun hashCode(): Int {
+        var result = guid.contentHashCode()
+        result = 31 * result + offset
+        return result
+    }
+}
+
+data class CustomFields(
+    private val fields: MutableMap<String, String> = mutableMapOf()
+) {
+    operator fun get(key: String): String? = fields[key]
+    operator fun set(key: String, value: String) {
+        fields[key] = value
+    }
+
+    companion object {
+        fun read(buffer: ByteBuffer): CustomFields {
+            val cf = CustomFields()
+
+            if (buffer.hasRemaining()) {
+                val startPos = buffer.position()
+                val size = buffer.int
+                val version = buffer.get()
+                val count = buffer.int
+
+                val keys = Array(count) { readFString(buffer) }
+                val values = Array(count) { readFString(buffer) }
+                keys.forEachIndexed { i, key -> cf[key] = values[i] }
+
+                val bytesRead = buffer.position() - startPos
+                if (bytesRead != size) {
+                    buffer.position(startPos + size)
+                }
+            }
+
+            return cf
+        }
+    }
+
+    fun write(buffer: ByteBuffer) {
+        val startPos = buffer.position()
+        buffer.putInt(0)
+        buffer.put(0)
+        buffer.putInt(fields.size)
+
+        fields.keys.forEach { key -> writeFString(buffer, key) }
+        fields.values.forEach { value -> writeFString(buffer, value) }
+
+        val endPos = buffer.position()
+        val size = endPos - startPos
+        buffer.putInt(startPos, size)
+    }
+}
+
+private fun readFString(buffer: ByteBuffer): String {
+    val length = buffer.int
+
+    return when {
+        length < 0 -> {
+            val absLength = -length * 2
+            val bytes = ByteArray(absLength - 2)
+            buffer.get(bytes)
+            buffer.position(buffer.position() + 2)
+            String(bytes, Charsets.UTF_16LE)
+        }
+        length > 0 -> {
+            val bytes = ByteArray(length - 1)
+            buffer.get(bytes)
+            buffer.position(buffer.position() + 1)
+            String(bytes, Charsets.US_ASCII)
+        }
+        else -> ""
+    }
+}
+
+private fun writeFString(buffer: ByteBuffer, str: String) {
+    if (str.isEmpty()) {
+        buffer.putInt(0)
+        return
+    }
+
+    val isAscii = str.all { it.code < 128 }
+
+    if (isAscii) {
+        val bytes = str.toByteArray(Charsets.US_ASCII)
+        buffer.putInt(bytes.size + 1)
+        buffer.put(bytes)
+        buffer.put(0)
+    } else {
+        val bytes = str.toByteArray(Charsets.UTF_16LE)
+        buffer.putInt(-(bytes.size / 2 + 1))
+        buffer.put(bytes)
+        buffer.put(0)
+        buffer.put(0)
+    }
+}

@@ -19,6 +19,7 @@
 import glob
 import json
 import os
+import shutil
 import struct
 import sys
 import zlib
@@ -158,6 +159,7 @@ def main():
         previous = set()
 
     ours = []
+    art = []
     for want in wanted:
         exe = resolve_exe(steam_root, want.get("exe", ""))
         if not exe:
@@ -165,6 +167,7 @@ def main():
             continue
         sid = short_id(want["key"])
         ours.append((sid, entry_for(sid, want, exe)))
+        art.append((sid, want))
         print("bannerlator-steam-shortcuts: %s -> id %d (steam://rungameid/%d) exe %s" % (want["name"], sid, long_id(sid), exe))
     owned = previous | {sid for sid, _ in ours}
 
@@ -199,6 +202,17 @@ def main():
             f.write(data)
         os.replace(tmp, path)
         print("bannerlator-steam-shortcuts: %s: %d of ours, %d of the user's" % (path, len(ours), len(keep)))
+
+        grid = os.path.join(account, "config", "grid")
+        for sid, want in art:
+            for kind, suffix in (("p", "p"), ("hero", "_hero")):
+                src = (want.get("art") or {}).get(kind)
+                if not src or not os.path.isfile(src):
+                    continue
+                os.makedirs(grid, exist_ok=True)
+                dst = os.path.join(grid, "%d%s%s" % (sid, suffix, os.path.splitext(src)[1] or ".jpg"))
+                if not os.path.isfile(dst) or os.path.getmtime(dst) < os.path.getmtime(src):
+                    shutil.copyfile(src, dst)
 
     tmp = IDS + ".tmp"
     with open(tmp, "w") as f:

@@ -10,11 +10,45 @@ import java.io.File
  * The non-Steam shortcuts the app puts in the Steam library. The app only lists them in the
  * runtime's ~/.bl-shortcuts.json; the session's bannerlator-steam-shortcuts writes them into the
  * client's shortcuts.vdf before the client starts, and bannerlator-steam-compat maps them to our
- * Proton. For now the only one is the shortcut test, which checks that path on a device before
- * GOG and Epic games are sent down it.
+ * Proton. They are the installed GOG and Epic games (StoreShortcuts), and the shortcut test,
+ * which checks that path on a device.
  */
 object SteamShortcuts {
     private const val TEST_KEY = "test-notepad"
+
+    /** One shortcut; [portrait] and [hero] are guest paths of images for its library art. */
+    data class Entry(
+        val key: String,
+        val name: String,
+        val exe: String,
+        val startDir: String,
+        val launchOptions: String,
+        val tags: List<String>,
+        val portrait: String? = null,
+        val hero: String? = null,
+    ) {
+        fun toJson(): JSONObject = JSONObject()
+            .put("key", key).put("name", name).put("exe", exe).put("startDir", startDir)
+            .put("launchOptions", launchOptions).put("tags", JSONArray(tags))
+            .put("art", JSONObject().apply {
+                portrait?.let { put("p", it) }
+                hero?.let { put("hero", it) }
+            })
+    }
+
+    private val STORE_KEY = Regex("^(gog|epic):")
+
+    /** Replaces the GOG and Epic shortcuts with [entries], leaving the rest (the test) alone. */
+    fun setStoreEntries(context: Context, entries: List<Entry>) {
+        val list = entries(context)
+        val kept = JSONArray()
+        for (i in 0 until list.length()) {
+            val e = list.getJSONObject(i)
+            if (!STORE_KEY.containsMatchIn(e.optString("key"))) kept.put(e)
+        }
+        entries.forEach { kept.put(it.toJson()) }
+        write(context, kept)
+    }
 
     private fun file(context: Context) = File(LinuxRuntime.rootDir(context), "root/.bl-shortcuts.json")
 
@@ -47,8 +81,12 @@ object SteamShortcuts {
                     .put("tags", JSONArray().put("SteamOS Lite")),
             )
         }
+        write(context, kept)
+    }
+
+    private fun write(context: Context, list: JSONArray) {
         val f = file(context)
         f.parentFile?.mkdirs()
-        FileUtils.writeString(f, JSONObject().put("shortcuts", kept).toString(2))
+        FileUtils.writeString(f, JSONObject().put("shortcuts", list).toString(2))
     }
 }

@@ -16,6 +16,7 @@
     <uses-feature android:name="android.hardware.touchscreen" android:required="false" />
 
     <application
+        android:name=".SteamOSLiteApp"
         android:allowBackup="false"
         android:icon="@drawable/ic_launcher"
         android:label="SteamOS Lite"
@@ -63,6 +64,16 @@
                 <data android:scheme="steamoslite" android:host="run" />
             </intent-filter>
         </activity>
+
+        <activity
+            android:name=".stores.StoreLoginActivity"
+            android:exported="false"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboard|keyboardHidden" />
+
+        <service
+            android:name=".stores.StoreDownloadService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
 
         <service
             android:name=".runtime.InstallService"

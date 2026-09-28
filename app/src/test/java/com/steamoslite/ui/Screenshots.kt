@@ -156,6 +156,45 @@ class Screenshots {
         }
     }
 
+    private val storeGames = games.take(6).mapIndexed { i, (_, name, _) ->
+        com.steamoslite.stores.StoreGame(com.steamoslite.stores.Store.GOG, (2000 + i).toString(), name, developer = "Northlight",
+            description = "Chart a frozen frontier with your crew, one outpost at a time.", downloadSize = 12_400_000_000L)
+    }
+
+    private fun storeTab(state: com.steamoslite.stores.Store.() -> StoreTabState) = paparazzi.snapshot {
+        AppTheme {
+            HomeScreen(
+                state = RuntimeState.Ready("r9", null),
+                games = emptyList(),
+                onInstall = {}, onCancel = {}, onRetry = {}, onLaunch = {}, onOpenSettings = {},
+                tab = com.steamoslite.stores.Store.GOG,
+                onSelectTab = {},
+                storeTab = com.steamoslite.stores.Store.GOG.state(),
+                storeCoverOf = { g -> games.firstOrNull { it.second == g.title }?.let { covers[it.first.appId] } },
+            )
+        }
+    }
+
+    @Test fun gog_signed_out() = storeTab { StoreTabState(this, signedIn = false) }
+
+    @Test fun gog_library() = storeTab {
+        StoreTabState(
+            this, signedIn = true, games = storeGames, installed = setOf("2000"),
+            downloads = mapOf("2001" to com.steamoslite.stores.StoreDownload(this, "2001", storeGames[1].title, fraction = 0.37f, stage = "Downloading")),
+        )
+    }
+
+    @Test fun store_game() = paparazzi.snapshot {
+        AppTheme {
+            StoreGameScreen(
+                storeGames[1], null,
+                com.steamoslite.stores.StoreDownload(com.steamoslite.stores.Store.GOG, "2001", storeGames[1].title, fraction = 0.37f, stage = "Downloading"),
+                onBack = {}, onPlay = {}, onInstall = {}, onCancel = {}, onUninstall = {},
+                image = { _, _ -> null },
+            )
+        }
+    }
+
     @Test fun library_update_available() = home(RuntimeState.Ready("r8", release))
 
     @Test fun library_empty() = home(RuntimeState.Ready("r9", null), withGames = false)

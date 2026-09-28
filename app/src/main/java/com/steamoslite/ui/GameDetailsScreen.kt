@@ -243,7 +243,7 @@ private fun dateOf(unixSeconds: Long): String = DateFormat.getDateInstance(DateF
 
 /** A local file or a URL as a bitmap, loaded off the main thread and remembered for the composition. */
 @Composable
-private fun rememberImage(source: Any?, maxPx: Int): Bitmap? {
+internal fun rememberImage(source: Any?, maxPx: Int): Bitmap? {
     val context = LocalContext.current
     val bitmap by produceState<Bitmap?>(null, source) {
         value = withContext(Dispatchers.IO) {

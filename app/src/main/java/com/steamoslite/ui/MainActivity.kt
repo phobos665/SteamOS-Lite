@@ -58,6 +58,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.draw.clip
@@ -67,6 +68,7 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.onKeyEvent
+import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.Modifier
@@ -84,6 +86,9 @@ import com.steamoslite.games.SteamLibrary
 import com.steamoslite.runtime.InstallService
 import com.steamoslite.runtime.InstallStatus
 import com.steamoslite.runtime.RuntimeInstaller
+import com.steamoslite.stores.Store
+import com.steamoslite.stores.StoreGame
+import com.steamoslite.stores.Stores
 import com.steamoslite.util.LogShare
 import java.io.File
 import kotlinx.coroutines.Dispatchers
@@ -91,8 +96,9 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 /**
- * Home: install the runtime once, then launch SteamOS or go straight into an installed game.
- * Everything else - signing in, installing games, settings - happens inside SteamOS itself.
+ * Home: install the runtime once, then launch SteamOS or go straight into an installed game. The
+ * library has a tab each for Steam, GOG and Epic; GOG and Epic games are installed from here and
+ * handed to Steam as non-Steam shortcuts.
  */
 class MainActivity : ComponentActivity() {
     /** Bumped on every resume so the list re-reads what Steam installed during the last session. */
@@ -101,6 +107,7 @@ class MainActivity : ComponentActivity() {
     private var showSettings by mutableStateOf(false)
     /** The game whose page is open (long press on its tile, or Y / Menu on a pad). */
     private var detailsFor by mutableStateOf<InstalledGame?>(null)
+    private var storeGameFor by mutableStateOf<StoreGame?>(null)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -121,11 +128,15 @@ class MainActivity : ComponentActivity() {
                             onPin = if (HomeShortcuts.supported(this)) ({ pin(game) }) else null,
                         )
                     }
+                    storeGameFor != null -> storeGameFor?.let { game ->
+                        StoreGameRoute(game, onBack = { storeGameFor = null }, onPlay = { launch(Stores.launchId(game)) })
+                    }
                     else -> Home(
                         resumeCount, ::launch,
                         onOpenProtons = { showProtons = true },
                         onOpenSettings = { showSettings = true },
                         onOpenDetails = { detailsFor = it },
+                        onOpenStoreGame = { storeGameFor = it },
                     )
                 }
             }
@@ -175,10 +186,14 @@ private fun Home(
     onOpenProtons: () -> Unit,
     onOpenSettings: () -> Unit,
     onOpenDetails: (InstalledGame) -> Unit,
+    onOpenStoreGame: (StoreGame) -> Unit,
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var state by remember { mutableStateOf<RuntimeState>(RuntimeState.Checking) }
+    var tabId by rememberSaveable { mutableStateOf<String?>(null) }
+    val tab = Store.entries.firstOrNull { it.id == tabId }
+    val (storeTab, storeActions) = rememberStoreTab(tab, resumeCount, onOpenStoreGame) { onLaunch(Stores.launchId(it)) }
 
     suspend fun refresh() {
         val installed = withContext(Dispatchers.IO) { RuntimeInstaller.installedVersion(context) }
@@ -235,6 +250,10 @@ private fun Home(
         onOpenDetails = onOpenDetails,
         onOpenProtons = onOpenProtons,
         onOpenSettings = onOpenSettings,
+        tab = tab,
+        onSelectTab = { tabId = it?.id },
+        storeTab = storeTab,
+        storeActions = storeActions,
     )
 }
 
@@ -256,6 +275,13 @@ internal fun HomeScreen(
     /** Opens the settings screen; null hides the cog. */
     onOpenSettings: (() -> Unit)? = null,
     coverOf: @Composable (InstalledGame) -> Bitmap? = { loadCover(it) },
+    /** The library tab shown: null is Steam. */
+    tab: Store? = null,
+    /** Switches the library tab; null hides the tabs. */
+    onSelectTab: ((Store?) -> Unit)? = null,
+    storeTab: StoreTabState? = null,
+    storeActions: StoreTabActions = StoreTabActions(),
+    storeCoverOf: @Composable (StoreGame) -> Bitmap? = { rememberImage(it.coverUrl.ifEmpty { null }, 400) },
 ) {
     // Phones in landscape have little height: everything is sized from it, and the library scrolls
     // as one grid with the header, so the header does not keep a strip of the screen for itself.
@@ -275,7 +301,8 @@ internal fun HomeScreen(
             }
         }
         if (state is RuntimeState.Ready) {
-            Library(state, games, layout, title, onLaunch, { state.update?.let(onInstall) }, onShareLogs, onOpenProtons, onOpenDetails, coverOf)
+            Library(state, games, layout, title, onLaunch, { state.update?.let(onInstall) }, onShareLogs, onOpenProtons, onOpenDetails, coverOf,
+                tab, onSelectTab, storeTab, storeActions, storeCoverOf)
         } else {
             Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(layout.padding)) {
                 title()
@@ -358,11 +385,27 @@ private fun Library(
     onOpenProtons: (() -> Unit)?,
     onOpenDetails: ((InstalledGame) -> Unit)?,
     coverOf: @Composable (InstalledGame) -> Bitmap?,
+    tab: Store?,
+    onSelectTab: ((Store?) -> Unit)?,
+    storeTab: StoreTabState?,
+    storeActions: StoreTabActions,
+    storeCoverOf: @Composable (StoreGame) -> Bitmap?,
 ) {
     val full: LazyGridItemSpanScope.() -> GridItemSpan = { GridItemSpan(maxLineSpan) }
+    val tabs = listOf<Store?>(null) + Store.entries
     LazyVerticalGrid(
         columns = GridCells.Adaptive(layout.tileWidth),
-        modifier = Modifier.fillMaxSize(),
+        modifier = Modifier.fillMaxSize().onPreviewKeyEvent { e ->
+            // L1 / R1 step through the tabs from anywhere in the grid, as Steam's own library does.
+            val step = when (e.nativeKeyEvent.keyCode) {
+                KeyEvent.KEYCODE_BUTTON_L1 -> -1
+                KeyEvent.KEYCODE_BUTTON_R1 -> 1
+                else -> 0
+            }
+            if (step == 0 || onSelectTab == null) return@onPreviewKeyEvent false
+            if (e.type == KeyEventType.KeyDown) onSelectTab(tabs[(tabs.indexOf(tab) + step).mod(tabs.size)])
+            true
+        },
         contentPadding = PaddingValues(layout.padding),
         horizontalArrangement = Arrangement.spacedBy(layout.gap),
         verticalArrangement = Arrangement.spacedBy(layout.gap),
@@ -378,6 +421,11 @@ private fun Library(
                 if (onShareLogs != null) OutlinedButton(onClick = onShareLogs) { Text("Share logs") }
             }
         }
+        if (onSelectTab != null) item(key = "tabs", span = full) { LibraryTabs(tab, layout.gap, onSelectTab) }
+        if (tab != null) {
+            storeTabItems(storeTab, storeActions, layout, storeCoverOf)
+            return@LazyVerticalGrid
+        }
         item(key = "label", span = full) {
             Text(
                 if (games.isEmpty()) "No games installed yet. Launch SteamOS, sign in and install some - they appear here."
@@ -387,7 +435,7 @@ private fun Library(
             )
         }
         items(games, key = { it.appId }) { game ->
-            GameCard(game, coverOf(game), onMenu = { onOpenDetails?.invoke(game) }) { onLaunch(game.appId) }
+            Tile(game.name, coverOf(game), onMenu = { onOpenDetails?.invoke(game) }) { onLaunch(game.appId) }
         }
     }
 }
@@ -403,7 +451,7 @@ private fun loadCover(game: InstalledGame): Bitmap? {
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun GameCard(game: InstalledGame, cover: Bitmap?, onMenu: () -> Unit, onClick: () -> Unit) {
+internal fun Tile(title: String, cover: Bitmap?, badge: String? = null, onMenu: () -> Unit, onClick: () -> Unit) {
     val interaction = remember { MutableInteractionSource() }
     val focused by interaction.collectIsFocusedAsState()
     val shape = RoundedCornerShape(8.dp)
@@ -423,9 +471,16 @@ private fun GameCard(game: InstalledGame, cover: Bitmap?, onMenu: () -> Unit, on
         contentAlignment = Alignment.Center,
     ) {
         if (cover != null) {
-            Image(cover.asImageBitmap(), game.name, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+            Image(cover.asImageBitmap(), title, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
         } else {
-            Text(game.name, color = Color.White, textAlign = TextAlign.Center, modifier = Modifier.padding(8.dp))
+            Text(title, color = Color.White, textAlign = TextAlign.Center, modifier = Modifier.padding(8.dp))
+        }
+        if (badge != null) {
+            Text(
+                badge, color = Color.White, fontSize = 12.sp,
+                modifier = Modifier.align(Alignment.BottomEnd).padding(6.dp)
+                    .background(Color(0xCC0E141B), RoundedCornerShape(4.dp)).padding(horizontal = 6.dp, vertical = 2.dp),
+            )
         }
     }
 }

@@ -4,6 +4,7 @@ import android.content.Context
 import android.os.Environment
 import android.util.Log
 import com.steamoslite.input.FakeInputWriter
+import com.steamoslite.stores.StoreBridge
 import com.steamoslite.util.FileUtils
 import com.steamoslite.util.TarZstd
 import java.io.File
@@ -34,6 +35,7 @@ class Session(
     private val pulse = PulseAudio(this.context)
     private val network = NetworkLink(this.context, root)
     private var process: SessionProcess? = null
+    private val storeBridge = StoreBridge(this.context)
 
     /** Told of each setup step as it finishes, for the startup timeline. */
     var onMark: (String) -> Unit = {}
@@ -159,6 +161,7 @@ class Session(
             }
         }, "UnpackComponents").apply { priority = Thread.MIN_PRIORITY }.start()
         mark("session files staged")
+        runCatching { storeBridge.start() }.onFailure { Log.w(TAG, "store bridge did not start", it) }
         network.publish()
         network.start()
         pulse.start()
@@ -179,6 +182,7 @@ class Session(
     }
 
     private fun stopServices() {
+        storeBridge.stop()
         network.stop()
         pulse.stop()
         logDir?.let { collectLogs(it) }
