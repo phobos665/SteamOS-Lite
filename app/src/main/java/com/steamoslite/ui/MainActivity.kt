@@ -61,6 +61,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.asImageBitmap
@@ -414,6 +415,7 @@ private fun GameCard(game: InstalledGame, cover: Bitmap?, onMenu: () -> Unit, on
         Modifier
             .aspectRatio(2f / 3f)
             .border(if (focused) 3.dp else 0.dp, if (focused) Color.White else Color.Transparent, shape)
+            .clip(shape)
             .background(Color(0xFF1E2A36), shape)
             .onKeyEvent { e ->
                 val menuKey = e.nativeKeyEvent.keyCode == KeyEvent.KEYCODE_BUTTON_Y ||
