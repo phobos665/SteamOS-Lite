@@ -4,6 +4,7 @@ import android.content.Context
 import com.steamoslite.stores.DownloadProgress
 import com.steamoslite.stores.Installation
 import com.steamoslite.stores.Net
+import com.steamoslite.stores.Store
 import com.steamoslite.stores.StoreGame
 import com.steamoslite.stores.epic.manifest.ChunkInfo
 import com.steamoslite.stores.epic.manifest.ChunkPart
@@ -36,9 +37,19 @@ object EpicDownloader {
     private const val RETRY_DELAY_MS = 1000L
     private const val CDN_USER_AGENT = "UELauncher/11.0.1-14907503+++Portal+Release-Live Windows/10.0.19041.1.256.64bit"
 
+    private class Plan(
+        val key: String,
+        val manifest: EpicManifest,
+        val cdnUrls: List<EpicManager.CdnUrl>,
+        val files: List<FileManifest>,
+        val consumers: Map<String, List<Pair<FileManifest, ChunkPart>>>,
+        val chunks: List<ChunkInfo>,
+    )
+
     /**
-     * Downloads [game]'s live build into [installDir] and returns how it starts. Files already on
-     * disk with the manifest's SHA-1 are kept, so an interrupted download resumes.
+     * Downloads [game]'s live build and its owned DLC into [installDir] and returns how it starts.
+     * DLC installs into the game's own directory. Files already on disk with the manifest's SHA-1
+     * are kept, so an interrupted download resumes.
      */
     suspend fun download(
         context: Context,
@@ -48,22 +59,54 @@ object EpicDownloader {
         progress: DownloadProgress,
         language: String = EpicConstants.EPIC_FALLBACK_CONTAINER_LANGUAGE,
     ): Installation = withContext(Dispatchers.IO) {
-        progress.stage = "Fetching the manifest"
-        val manifestData = EpicManager.fetchManifest(context, game).getOrThrow()
-        val cdnUrls = manifestData.cdnUrls.filter { !it.baseUrl.startsWith("https://cloudflare.epicgamescdn.com") }
-            .ifEmpty { manifestData.cdnUrls }
-        val manifest = EpicManifest.readAll(manifestData.manifestBytes)
-        val files = ManifestUtils.getFilesForSelectedInstallTags(manifest, EpicConstants.containerLanguageToEpicInstallTags(language))
-        if (files.isEmpty()) throw Exception("The manifest lists no files for this game")
-        val chunkDir = manifest.getChunkDir()
-
+        val tags = EpicConstants.containerLanguageToEpicInstallTags(language)
         installDir.mkdirs()
+        progress.stage = "Fetching the manifest"
+        val main = plan(EpicManager.fetchManifest(context, game).getOrThrow(), game.id, tags, installDir, progress)
+        if (main.files.isEmpty()) throw Exception("The manifest lists no files for this game")
+
+        // DLC that is only an entitlement has no build of its own, so a failed or empty manifest
+        // is skipped rather than failing the install.
+        val dlc = mutableListOf<Pair<String, Plan>>()
+        for ((index, d) in game.dlc.withIndex()) {
+            progress.checkActive()
+            progress.stage = "Fetching DLC ${index + 1} of ${game.dlc.size}"
+            val asGame = StoreGame(Store.EPIC, d.id, d.title, namespace = d.namespace, catalogId = d.catalogId)
+            val manifest = EpicManager.fetchManifest(context, asGame).getOrNull() ?: continue
+            val plan = runCatching { plan(manifest, d.id, tags, installDir, progress) }.getOrNull() ?: continue
+            if (plan.files.isNotEmpty()) dlc += d.title to plan
+        }
+
+        val plans = listOf(main) + dlc.map { it.second }
+        progress.bytesTotal = plans.sumOf { p -> p.chunks.sumOf { it.fileSize } }
+        progress.bytesDone.set(0)
+        for ((index, plan) in plans.withIndex()) {
+            progress.stage = if (index == 0) "Downloading" else "Downloading DLC: ${dlc[index - 1].first}"
+            install(context, plan, installDir, progress)
+        }
+
+        val meta = main.manifest.meta
+        val exe = meta?.launchExe?.replace('\\', '/')?.trimStart('/').orEmpty()
+            .ifEmpty { guessExecutable(installDir) }
+        Installation(
+            guestDir = guestDir,
+            exe = exe,
+            args = meta?.launchCommand.orEmpty(),
+            sizeBytes = plans.sumOf { p -> p.files.sumOf { it.fileSize } },
+            version = meta?.buildVersion.orEmpty(),
+            dlc = dlc.map { it.first },
+        )
+    }
+
+    private fun plan(data: EpicManager.ManifestResult, key: String, tags: List<String>, installDir: File, progress: DownloadProgress): Plan {
+        val cdnUrls = data.cdnUrls.filter { !it.baseUrl.startsWith("https://cloudflare.epicgamescdn.com") }.ifEmpty { data.cdnUrls }
+        val manifest = EpicManifest.readAll(data.manifestBytes)
+        val files = ManifestUtils.getFilesForSelectedInstallTags(manifest, tags)
         progress.stage = "Checking existing files"
         val pending = files.filter { file ->
             progress.checkActive()
             !fileExistsWithCorrectHash(File(installDir, file.filename), file.fileSize, file.hash)
         }
-
         // Each chunk may feed parts of several files; every part is written straight to its file
         // at its offset once the chunk arrives, after which the cached chunk is no longer needed.
         val consumers = LinkedHashMap<String, MutableList<Pair<FileManifest, ChunkPart>>>()
@@ -73,43 +116,32 @@ object EpicDownloader {
         val chunks = consumers.keys.map {
             manifest.chunkDataList?.getChunkByGuid(it) ?: throw IllegalStateException("Chunk $it referenced by a file but not in the manifest")
         }
-        progress.bytesTotal = chunks.sumOf { it.fileSize }
-        progress.bytesDone.set(0)
+        return Plan(key, manifest, cdnUrls, files, consumers, chunks)
+    }
 
-        for (file in pending) {
+    private suspend fun install(context: Context, plan: Plan, installDir: File, progress: DownloadProgress) {
+        for (file in plan.consumers.values.flatten().map { it.first }.distinct()) {
             val out = File(installDir, file.filename)
             out.parentFile?.mkdirs()
             RandomAccessFile(out, "rw").use { it.setLength(file.fileSize) }
         }
-
-        val cacheDir = File(context.cacheDir, "epic_chunks/${game.id}").apply { mkdirs() }
+        val chunkDir = plan.manifest.getChunkDir()
+        val cacheDir = File(context.cacheDir, "epic_chunks/${plan.key}").apply { mkdirs() }
         val http = Net.httpForParallelDownloads(PARALLEL)
         val gate = Semaphore(PARALLEL)
-        progress.stage = "Downloading"
         coroutineScope {
-            chunks.map { chunk ->
+            plan.chunks.map { chunk ->
                 async {
                     gate.withPermit {
                         progress.checkActive()
-                        val cached = downloadChunkWithRetry(chunk, cacheDir, chunkDir, cdnUrls, progress, http)
-                        for ((file, part) in consumers.getValue(chunk.guidStr)) writePart(cached, part, File(installDir, file.filename))
+                        val cached = downloadChunkWithRetry(chunk, cacheDir, chunkDir, plan.cdnUrls, progress, http)
+                        for ((file, part) in plan.consumers.getValue(chunk.guidStr)) writePart(cached, part, File(installDir, file.filename))
                         cached.delete()
                     }
                 }
             }.awaitAll()
         }
         cacheDir.deleteRecursively()
-
-        val meta = manifest.meta
-        val exe = meta?.launchExe?.replace('\\', '/')?.trimStart('/').orEmpty()
-            .ifEmpty { guessExecutable(installDir) }
-        Installation(
-            guestDir = guestDir,
-            exe = exe,
-            args = meta?.launchCommand.orEmpty(),
-            sizeBytes = files.sumOf { it.fileSize },
-            version = meta?.buildVersion.orEmpty(),
-        )
     }
 
     private fun guessExecutable(installDir: File): String =

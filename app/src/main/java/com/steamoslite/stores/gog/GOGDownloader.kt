@@ -70,11 +70,14 @@ object GOGDownloader {
         val owned = GOGLibraryClient.getGameIds(context).getOrThrow().toSet()
         val depots = parser.filterDepotsByOwnership(parser.filterDepotsByLanguage(manifest, language).first, owned)
         if (depots.isEmpty()) throw Exception("No depots of this game are owned for this language")
+        val dlc = manifest.products
+            .filter { p -> p.productId != manifest.baseProductId && depots.any { it.productId == p.productId } }
+            .map { it.name }
 
         val timestamp = manifest.productTimestamp
         if (build.generation == 1 && timestamp != null) {
-            val size = downloadGen1(api, parser, depots.filter { it.productId == manifest.baseProductId }, build.platform, timestamp, installDir, progress)
-            return@withContext installation(installDir, game, guestDir, size, build.versionName)
+            val size = downloadGen1(api, parser, depots, build.platform, timestamp, installDir, progress)
+            return@withContext installation(installDir, game, guestDir, size, build.versionName, dlc)
         }
 
         data class Owned(val file: DepotFile, val productId: String)
@@ -86,20 +89,19 @@ object GOGDownloader {
             progress.stage = "Fetching depot ${index + 1} of ${depots.size}"
             val depotManifest = api.fetchDepotManifest(depot.manifest).getOrThrow()
             depotManifest.files.forEach { all += Owned(it, depot.productId) }
-            if (depot.productId == manifest.baseProductId) {
-                links += depotManifest.links
-                directories += depotManifest.directories
-            }
+            links += depotManifest.links
+            directories += depotManifest.directories
         }
 
-        // Base game only; support files (redistributable installers) land in the game directory
+        // The game and its owned DLC share one directory; where both list a path, the later depot
+        // (the DLC) wins. Support files (redistributable installers) land in the game directory
         // with their leading "app/" removed, as Galaxy lays them out.
-        val (baseFiles, _) = parser.separateBaseDLC(all.map { it.file }, manifest.baseProductId)
+        val depotFiles = all.map { it.file }.associateBy { it.path }.values.toList()
         val productOf = all.associate { (file, depotProduct) ->
             file.path to (file.productId?.takeIf { it != PLACEHOLDER_PRODUCT_ID } ?: depotProduct)
         }
-        val files = baseFiles.map { if (it.isSupportFile() && it.path.startsWith("app/")) it.copy(path = it.path.removePrefix("app/")) else it }
-        val originalPath = baseFiles.zip(files).associate { (orig, remapped) -> remapped.path to orig.path }
+        val files = depotFiles.map { if (it.isSupportFile() && it.path.startsWith("app/")) it.copy(path = it.path.removePrefix("app/")) else it }
+        val originalPath = depotFiles.zip(files).associate { (orig, remapped) -> remapped.path to orig.path }
 
         installDir.mkdirs()
         progress.stage = "Checking existing files"
@@ -167,10 +169,10 @@ object GOGDownloader {
         }
         cacheDir.deleteRecursively()
         createDirectoriesAndLinks(installDir, directories, links)
-        installation(installDir, game, guestDir, files.sumOf { f -> f.chunks.sumOf { it.size } }, build.versionName)
+        installation(installDir, game, guestDir, files.sumOf { f -> f.chunks.sumOf { it.size } }, build.versionName, dlc)
     }
 
-    private fun installation(installDir: File, game: StoreGame, guestDir: String, size: Long, version: String): Installation {
+    private fun installation(installDir: File, game: StoreGame, guestDir: String, size: Long, version: String, dlc: List<String>): Installation {
         val task = GOGManager.primaryPlayTask(installDir, game.id)
         return Installation(
             guestDir = guestDir,
@@ -179,6 +181,7 @@ object GOGDownloader {
             workingDir = task?.workingDir ?: "",
             sizeBytes = size,
             version = version,
+            dlc = dlc,
         )
     }
 
@@ -204,10 +207,11 @@ object GOGDownloader {
             parser.parseV1DepotManifest(json).filter { !it.isSupport }.forEach { entries += Entry(it, depot.productId) }
         }
         if (entries.isEmpty()) throw Exception("The build lists no files")
+        val files = entries.associateBy { it.file.path }.values.toList()
 
         installDir.mkdirs()
         progress.stage = "Checking existing files"
-        val pending = entries.filter { (file) ->
+        val pending = files.filter { (file) ->
             progress.checkActive()
             !fileMatches(File(installDir, file.path), file.size, file.hash)
         }
@@ -256,7 +260,7 @@ object GOGDownloader {
                 }
             }.awaitAll()
         }
-        return entries.sumOf { it.file.size }
+        return files.sumOf { it.file.size }
     }
 
     private fun downloadRange(http: OkHttpClient, url: String, offset: Long, size: Long, md5: String, out: File, progress: DownloadProgress) {

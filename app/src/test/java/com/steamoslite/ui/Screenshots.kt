@@ -187,7 +187,7 @@ class Screenshots {
     @Test fun store_game() = paparazzi.snapshot {
         AppTheme {
             StoreGameScreen(
-                storeGames[1], null,
+                storeGames[1].copy(dlc = listOf(com.steamoslite.stores.StoreDlc("d1", "Frozen Depths"), com.steamoslite.stores.StoreDlc("d2", "Outpost Pack"))), null,
                 com.steamoslite.stores.StoreDownload(com.steamoslite.stores.Store.GOG, "2001", storeGames[1].title, fraction = 0.37f, stage = "Downloading"),
                 onBack = {}, onPlay = {}, onInstall = {}, onCancel = {}, onUninstall = {},
                 image = { _, _ -> null },

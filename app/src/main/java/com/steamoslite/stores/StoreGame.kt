@@ -28,6 +28,8 @@ data class StoreGame(
     val requiresOwnershipToken: Boolean = false,
     val canRunOffline: Boolean = true,
     val thirdPartyManagedApp: String = "",
+    /** Owned DLC that installs separately (Epic); GOG's comes with the game's own build. */
+    val dlc: List<StoreDlc> = emptyList(),
 ) {
     fun toJson(): JSONObject = JSONObject()
         .put("store", store.id).put("id", id).put("title", title)
@@ -37,6 +39,7 @@ data class StoreGame(
         .put("downloadSize", downloadSize).put("namespace", namespace).put("catalogId", catalogId)
         .put("requiresOwnershipToken", requiresOwnershipToken).put("canRunOffline", canRunOffline)
         .put("thirdPartyManagedApp", thirdPartyManagedApp)
+        .put("dlc", JSONArray().apply { dlc.forEach { put(it.toJson()) } })
 
     companion object {
         fun fromJson(o: JSONObject) = StoreGame(
@@ -55,7 +58,16 @@ data class StoreGame(
             requiresOwnershipToken = o.optBoolean("requiresOwnershipToken"),
             canRunOffline = o.optBoolean("canRunOffline", true),
             thirdPartyManagedApp = o.optString("thirdPartyManagedApp"),
+            dlc = o.optJSONArray("dlc")?.let { a -> List(a.length()) { StoreDlc.fromJson(a.getJSONObject(it)) } }.orEmpty(),
         )
+    }
+}
+
+data class StoreDlc(val id: String, val title: String, val namespace: String = "", val catalogId: String = "") {
+    fun toJson(): JSONObject = JSONObject().put("id", id).put("title", title).put("namespace", namespace).put("catalogId", catalogId)
+
+    companion object {
+        fun fromJson(o: JSONObject) = StoreDlc(o.getString("id"), o.optString("title"), o.optString("namespace"), o.optString("catalogId"))
     }
 }
 
@@ -69,14 +81,18 @@ data class Installation(
     val workingDir: String = "",
     val sizeBytes: Long = 0,
     val version: String = "",
+    /** Titles of the DLC installed with it. */
+    val dlc: List<String> = emptyList(),
 ) {
     fun toJson(): JSONObject = JSONObject().put("guestDir", guestDir).put("exe", exe).put("args", args)
         .put("workingDir", workingDir).put("sizeBytes", sizeBytes).put("version", version)
+        .put("dlc", JSONArray(dlc))
 
     companion object {
         fun fromJson(o: JSONObject) = Installation(
             o.getString("guestDir"), o.getString("exe"), o.optString("args"),
             o.optString("workingDir"), o.optLong("sizeBytes"), o.optString("version"),
+            o.optJSONArray("dlc")?.let { a -> List(a.length()) { a.getString(it) } }.orEmpty(),
         )
     }
 }

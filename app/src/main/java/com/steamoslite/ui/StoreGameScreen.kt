@@ -86,6 +86,7 @@ internal fun StoreGameScreen(
     image: @Composable (source: Any?, maxPx: Int) -> Bitmap? = { source, maxPx -> rememberImage(source, maxPx) },
 ) {
     var confirmUninstall by remember(game.id) { mutableStateOf(false) }
+    val running = download != null && !download.done && download.error == null
     BoxWithConstraints(Modifier.fillMaxSize()) {
         val compact = maxHeight < 480.dp
         val pad = if (compact) 12.dp else 24.dp
@@ -96,21 +97,21 @@ internal fun StoreGameScreen(
                     OutlinedButton(onClick = onBack) { Text("Back") }
                     Text(game.title, color = Color.White, fontSize = if (compact) 20.sp else 26.sp, fontWeight = FontWeight.Bold,
                         maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
-                    val running = download != null && !download.done && download.error == null
                     when {
+                        running -> OutlinedButton(onClick = onCancel, modifier = Modifier.focusRequester(primary)) { Text("Cancel download") }
                         installation != null -> {
                             Button(onClick = onPlay, modifier = Modifier.focusRequester(primary)) { Text("Play", fontSize = 18.sp) }
+                            OutlinedButton(onClick = onInstall) { Text("Update") }
                             OutlinedButton(onClick = { if (confirmUninstall) onUninstall() else confirmUninstall = true }) {
                                 Text(if (confirmUninstall) "Confirm uninstall" else "Uninstall")
                             }
                         }
-                        running -> OutlinedButton(onClick = onCancel, modifier = Modifier.focusRequester(primary)) { Text("Cancel download") }
                         else -> Button(onClick = onInstall, modifier = Modifier.focusRequester(primary)) {
                             Text(if (download?.error != null) "Retry" else "Install" + sizeLabel(game.downloadSize), fontSize = 18.sp)
                         }
                     }
                 }
-                LaunchedEffect(installation != null) { runCatching { primary.requestFocus() } }
+                LaunchedEffect(installation != null, running) { runCatching { primary.requestFocus() } }
             }
             if (game.heroUrl.isNotEmpty()) {
                 item {
@@ -120,7 +121,7 @@ internal fun StoreGameScreen(
                     }
                 }
             }
-            if (download != null && installation == null) {
+            if (download != null && (installation == null || running || download.error != null)) {
                 item {
                     if (download.error != null) {
                         Text("Download failed: ${download.error}", color = Color(0xFFFF8080))
@@ -138,6 +139,21 @@ internal fun StoreGameScreen(
                             "non-Steam game from the next time SteamOS starts; Play starts it straight away.",
                         color = Color(0xFF8FD3FF),
                     )
+                }
+            }
+            val dlc = installation?.dlc ?: game.dlc.map { it.title }
+            if (dlc.isNotEmpty()) {
+                item {
+                    Text(
+                        (if (installation != null) "DLC installed: " else "Owned DLC, installed with the game: ") + dlc.joinToString(", "),
+                        color = Color.LightGray,
+                    )
+                }
+            }
+            if (installation != null) {
+                item {
+                    Text("Update fetches the latest build and any DLC bought since, keeping files that are already right.",
+                        color = Color.Gray, fontSize = 13.sp)
                 }
             }
             if (game.thirdPartyManagedApp.isNotEmpty()) {

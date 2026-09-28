@@ -3,6 +3,7 @@ package com.steamoslite.stores.epic
 import android.content.Context
 import com.steamoslite.stores.Net
 import com.steamoslite.stores.Store
+import com.steamoslite.stores.StoreDlc
 import com.steamoslite.stores.StoreGame
 import com.steamoslite.stores.sanitizeForFilename
 import kotlinx.coroutines.Dispatchers
@@ -46,22 +47,31 @@ object EpicManager {
         val additionalCommandline: String? = null,
     )
 
-    /** The account's Windows games, DLC and add-ons left out. */
+    /** The account's Windows games, each with the DLC it owns for it. */
     suspend fun refreshLibrary(context: Context, onProgress: (Int, Int) -> Unit = { _, _ -> }): Result<List<StoreGame>> =
         withContext(Dispatchers.IO) {
             try {
                 val accessToken = EpicAuthManager.getStoredCredentials(context).getOrElse { return@withContext Result.failure(it) }.accessToken
                 val items = fetchLibrary(accessToken).getOrElse { return@withContext Result.failure(it) }
                 val games = mutableListOf<StoreGame>()
+                val dlcByBaseCatalogId = mutableMapOf<String, MutableList<StoreDlc>>()
                 for ((index, item) in items.withIndex()) {
                     onProgress(index + 1, items.size)
                     val data = runCatching {
                         fetchCatalogItem(item.namespace, item.catalogItemId, accessToken, item.country ?: "US", includeMainGameDetails = true)
                     }.getOrNull() ?: continue
-                    if (data.has("mainGameItem")) continue
-                    games += parseGameFromCatalog(data, item.appName)
+                    val base = data.optJSONObject("mainGameItem")?.optString("id").orEmpty()
+                    if (base.isNotEmpty()) {
+                        dlcByBaseCatalogId.getOrPut(base) { mutableListOf() } +=
+                            StoreDlc(item.appName, data.optString("title", item.appName), item.namespace, item.catalogItemId)
+                    } else if (!data.has("mainGameItem")) {
+                        games += parseGameFromCatalog(data, item.appName)
+                    }
                 }
-                Result.success(games.sortedBy { it.title.lowercase() })
+                Result.success(
+                    games.map { g -> g.copy(dlc = dlcByBaseCatalogId[g.catalogId].orEmpty().sortedBy { it.title.lowercase() }) }
+                        .sortedBy { it.title.lowercase() },
+                )
             } catch (e: Exception) {
                 Timber.tag("Epic").e(e, "Failed to refresh Epic library")
                 Result.failure(e)
