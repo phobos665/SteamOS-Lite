@@ -30,7 +30,11 @@ object GOGManager {
             val wanted = ids.filter { it != GALAXY_CLIENT_ID && it !in hidden }
             for ((index, id) in wanted.withIndex()) {
                 onProgress(index + 1, wanted.size)
-                byId[id]?.let { games += it; continue }
+                val cached = byId[id]
+                if (cached != null) {
+                    games += cached
+                    continue
+                }
                 try {
                     val parsed = GOGLibraryClient.getGameById(context, id).getOrNull() ?: continue
                     val excluded = parsed.title == "Unknown Game" || parsed.title.startsWith("product_title_") ||
