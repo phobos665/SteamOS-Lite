@@ -7,7 +7,6 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
-import android.view.Choreographer
 import android.view.Gravity
 import android.view.KeyEvent
 import android.view.MotionEvent
@@ -35,7 +34,8 @@ import kotlin.concurrent.thread
  *
  * Runs in its own process (":session"). The compositor and everything the session starts are
  * process-wide and built for one run, so a session ends by ending the process - the same thing
- * Bannerlator does when it returns from a game.
+ * Bannerlator does when it returns from a game. The session itself is held by [SessionHost], so
+ * this screen can close while SteamOS keeps running, and a new one picks it up again.
  */
 class SessionActivity : Activity() {
     private lateinit var surface: SurfaceView
@@ -44,19 +44,12 @@ class SessionActivity : Activity() {
     private lateinit var quickMenu: QuickMenu
     private lateinit var onScreen: OnScreenController
     private lateinit var controllers: Controllers
-    private var session: Session? = null
     private lateinit var timeline: StartupTimeline
-    private var compositorStarted = false
-    @Volatile private var ending = false
+    /** Closed with "Leave SteamOS running": the session stays up without a screen. */
+    private var leaving = false
+    private val ending get() = SessionHost.ending
     private val main = Handler(Looper.getMainLooper())
-
-    private val vsync = object : Choreographer.FrameCallback {
-        override fun doFrame(frameTimeNanos: Long) {
-            if (ending) return
-            WaylandCompositor.nativeVsync(frameTimeNanos)
-            Choreographer.getInstance().postFrameCallback(this)
-        }
-    }
+    private val closeOnEnd: () -> Unit = { finish() }
 
     private val inputDevices = object : InputManager.InputDeviceListener {
         override fun onInputDeviceAdded(deviceId: Int) {}
@@ -76,16 +69,18 @@ class SessionActivity : Activity() {
         surface = SurfaceView(this)
         status = loadingView(this)
         keyboard = KeyboardBridge(this)
-        controllers = Controllers(this, Session.fakeInputDir(this))
+        controllers = SessionHost.controllers(this)
         onScreen = OnScreenController(this) { controllers.setOnScreen(it) }.apply {
             visibility = if (Settings.onScreenController(this@SessionActivity)) View.VISIBLE else View.GONE
         }
         quickMenu = QuickMenu(this).apply {
-            setItems("SteamOS", listOf(
+            val keepRunning = if (SessionHost.running) SessionHost.keepRunning else Settings.keepRunning(this@SessionActivity)
+            setItems("SteamOS", listOfNotNull(
                 QuickMenu.Item({ if (keyboard.keyboardVisible) "Hide keyboard" else "Show keyboard" }) { toggleKeyboard() },
                 QuickMenu.Item({ if (onScreenShown) "Hide on-screen controller" else "Show on-screen controller" }) {
                     setOnScreenShown(!onScreenShown)
                 },
+                if (keepRunning) QuickMenu.Item({ "Leave SteamOS running" }) { leave() } else null,
                 QuickMenu.Item({ "Exit SteamOS" }) { finishSession(null) },
                 QuickMenu.Item({ "Close menu" }) {},
             ))
@@ -101,11 +96,13 @@ class SessionActivity : Activity() {
         hideSystemBars()
 
         getSystemService(InputManager::class.java).registerInputDeviceListener(inputDevices, main)
+        SessionHost.onEnded = closeOnEnd
 
+        if (SessionHost.running) resume(intent.getStringExtra(EXTRA_APP_ID))
         surface.holder.addCallback(object : SurfaceHolder.Callback {
             override fun surfaceCreated(holder: SurfaceHolder) {
-                if (!compositorStarted) {
-                    compositorStarted = true
+                if (!SessionHost.compositorStarted) {
+                    SessionHost.compositorStarted = true
                     startCompositor(holder)
                     timeline.mark("compositor started")
                     startSession()
@@ -129,18 +126,22 @@ class SessionActivity : Activity() {
         WaylandCompositor.nativeStartWithSurface(
             holder.surface, runtimeDir.path, driver?.first, driver?.second, applicationInfo.nativeLibraryDir,
         )
-        Choreographer.getInstance().postFrameCallback(vsync)
+        SessionHost.startVsync()
     }
 
     private fun startSession() {
         // Pads first, so Steam sees them in its very first device scan.
         controllers.start()
         val appId = intent.getStringExtra(EXTRA_APP_ID)
-        val s = Session(this, appId, output.width, output.height, refreshHz()) { status ->
-            main.post { finishSession("Steam exited ($status)") }
+        val app = applicationContext
+        val s = Session(app, appId, output.width, output.height, refreshHz()) { status ->
+            main.post {
+                android.util.Log.i(TAG, "Steam exited ($status)")
+                SessionHost.end(app)
+            }
         }
         s.onMark = { timeline.mark(it) }
-        session = s
+        SessionHost.begin(app, s)
         thread(name = "SessionStart") {
             try {
                 s.start()
@@ -263,7 +264,7 @@ class SessionActivity : Activity() {
                 }
                 if (ready) {
                     timeline.mark("loading screen hidden")
-                    timeline.write(this@SessionActivity.session?.logDir)
+                    timeline.write(SessionHost.session?.logDir)
                     main.post { status.visibility = View.GONE }
                     return
                 }
@@ -421,18 +422,72 @@ class SessionActivity : Activity() {
 
     private fun finishSession(message: String?) {
         if (ending) return
-        ending = true
         message?.let { Log.i(TAG, it) }
         timeline.mark("session ended" + (message?.let { ": $it" } ?: ""))
-        timeline.write(session?.logDir)
-        thread(name = "SessionStop") {
-            session?.stop()
-            controllers.stop()
-            main.post {
-                finish()
-                // Everything the session started is process-wide; start the next one clean.
-                main.postDelayed({ android.os.Process.killProcess(android.os.Process.myPid()) }, 300)
+        timeline.write(SessionHost.session?.logDir)
+        SessionHost.end(this)
+    }
+
+    /** Back to the app with SteamOS still running; the notification or a launch brings it back. */
+    private fun leave() {
+        leaving = true
+        onScreen.releaseAll()
+        controllers.setOnScreen(null)
+        if (keyboard.keyboardVisible) keyboard.hide()
+        finish()
+    }
+
+    override fun onNewIntent(intent: android.content.Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        if (SessionHost.running) resume(intent.getStringExtra(EXTRA_APP_ID))
+    }
+
+    /**
+     * Shows a session that was already running: straight to the picture, or, for a game, a
+     * loading screen until the client has it running.
+     */
+    private fun resume(appId: String?) {
+        timeline = StartupTimeline(intent.getLongExtra(EXTRA_TAPPED_AT, System.currentTimeMillis()))
+        timeline.mark("SteamOS already running")
+        if (appId == null) {
+            status.visibility = View.GONE
+            return
+        }
+        status.visibility = View.VISIBLE
+        status.text = "Starting your game…"
+        status.setOnClickListener {
+            timeline.mark("loading screen dismissed with a tap")
+            status.visibility = View.GONE
+        }
+        SessionHost.launch(this, appId)
+        timeline.mark("game handed to the running client")
+        val t = timeline
+        thread(name = "LaunchWatch") {
+            val started = System.currentTimeMillis()
+            var launchSeenAt = 0L
+            var gameSeenAt = 0L
+            while (!ending) {
+                Thread.sleep(500)
+                val now = System.currentTimeMillis()
+                val game = gameProgress(appId)
+                if (game >= GAME_LAUNCHING && launchSeenAt == 0L) {
+                    launchSeenAt = now
+                    t.mark("Steam launching app $appId")
+                    main.post { status.text = "Starting your game…\n\nSteam is starting the game" }
+                }
+                if (game >= GAME_RUNNING && gameSeenAt == 0L) {
+                    gameSeenAt = now
+                    t.mark("game process running")
+                    main.post { status.text = "Starting your game…\n\nThe game is starting" }
+                }
+                if ((gameSeenAt > 0 && now - gameSeenAt >= 3000) || (launchSeenAt > 0 && now - launchSeenAt >= 30_000) ||
+                    now - started >= 60_000
+                ) break
             }
+            t.mark("loading screen hidden")
+            t.write(SessionHost.session?.logDir, "launch.txt")
+            main.post { status.visibility = View.GONE }
         }
     }
 
@@ -443,12 +498,10 @@ class SessionActivity : Activity() {
 
     override fun onDestroy() {
         getSystemService(InputManager::class.java).unregisterInputDeviceListener(inputDevices)
-        if (!ending) {
-            // Destroyed without finishSession (task swiped away): take the session down with us.
-            ending = true
-            session?.stop()
-            controllers.stop()
-        }
+        if (SessionHost.onEnded === closeOnEnd) SessionHost.onEnded = null
+        // Destroyed without Exit (the task swiped away): the session goes too, unless it is meant
+        // to keep running without a screen.
+        if (!ending && !leaving && !isChangingConfigurations && !SessionHost.keepRunning) SessionHost.end(this)
         super.onDestroy()
     }
 

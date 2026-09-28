@@ -70,6 +70,7 @@ internal data class SettingsState(
     val steamUpdates: Boolean = true,
     val protonLog: Boolean = true,
     val clientAllCores: Boolean = true,
+    val keepRunning: Boolean = true,
     val onScreen: Boolean = false,
     /** The frontend shortcut folder, or null when exporting is off. */
     val frontendDir: String? = null,
@@ -89,6 +90,7 @@ internal sealed interface SettingsChange {
     data class SteamUpdates(val on: Boolean) : SettingsChange
     data class ProtonLog(val on: Boolean) : SettingsChange
     data class ClientAllCores(val on: Boolean) : SettingsChange
+    data class KeepRunning(val on: Boolean) : SettingsChange
     data class OnScreen(val on: Boolean) : SettingsChange
     /** Opens the folder picker for frontend shortcuts. */
     data object FrontendPick : SettingsChange
@@ -119,6 +121,7 @@ internal fun SettingsRoute(onBack: () -> Unit) {
                 steamUpdates = Settings.steamUpdates(context),
                 protonLog = Settings.protonLog(context),
                 clientAllCores = Settings.clientAllCores(context),
+                keepRunning = Settings.keepRunning(context),
                 onScreen = Settings.onScreenController(context),
                 frontendDir = FrontendExport.dir(context)?.path,
                 shortcutTest = SteamShortcuts.testEnabled(context),
@@ -202,6 +205,7 @@ internal fun SettingsRoute(onBack: () -> Unit) {
                     is SettingsChange.SteamUpdates -> Settings.setSteamUpdates(context, change.on)
                     is SettingsChange.ProtonLog -> Settings.setProtonLog(context, change.on)
                     is SettingsChange.ClientAllCores -> Settings.setClientAllCores(context, change.on)
+                    is SettingsChange.KeepRunning -> Settings.setKeepRunning(context, change.on)
                     is SettingsChange.OnScreen -> Settings.setOnScreenController(context, change.on)
                     is SettingsChange.ShortcutTest -> SteamShortcuts.setTest(context, change.on)
                     is SettingsChange.Import, SettingsChange.FrontendPick, SettingsChange.FrontendExportNow,
@@ -285,6 +289,14 @@ internal fun SettingsScreen(state: SettingsState, onBack: () -> Unit, onChange: 
         }
 
         item { Section("Steam") }
+        item {
+            Toggle(
+                "Keep SteamOS running",
+                "Leaving SteamOS keeps it running in the background (a notification shows it), so coming back " +
+                    "or starting a game takes seconds instead of a full boot. Uses memory and some battery while it runs.",
+                state.keepRunning,
+            ) { onChange(SettingsChange.KeepRunning(it)) }
+        }
         item {
             Toggle(
                 "Steam updates",

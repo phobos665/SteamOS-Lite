@@ -1,5 +1,6 @@
 package com.steamoslite.ui
 
+import android.app.ActivityManager
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
@@ -228,6 +229,13 @@ private fun Home(
         }
     }
 
+    // SteamOS may still be running from before (left running, or the app switched away from it).
+    var sessionRunning by remember { mutableStateOf(false) }
+    LaunchedEffect(resumeCount) {
+        sessionRunning = context.getSystemService(ActivityManager::class.java).runningAppProcesses.orEmpty()
+            .any { it.processName == context.packageName + ":session" }
+    }
+
     val hasLogs by produceState(initialValue = false, resumeCount) {
         value = withContext(Dispatchers.IO) { LogShare.hasLogs(context) }
     }
@@ -254,6 +262,11 @@ private fun Home(
         onSelectTab = { tabId = it?.id },
         storeTab = storeTab,
         storeActions = storeActions,
+        sessionRunning = sessionRunning,
+        onStopSession = {
+            SessionKeepAlive.requestStop(context)
+            sessionRunning = false
+        },
     )
 }
 
@@ -282,6 +295,9 @@ internal fun HomeScreen(
     storeTab: StoreTabState? = null,
     storeActions: StoreTabActions = StoreTabActions(),
     storeCoverOf: @Composable (StoreGame) -> Bitmap? = { rememberImage(it.coverUrl.ifEmpty { null }, 400) },
+    /** SteamOS is running in the background: Launch becomes Resume, and it can be stopped. */
+    sessionRunning: Boolean = false,
+    onStopSession: (() -> Unit)? = null,
 ) {
     // Phones in landscape have little height: everything is sized from it, and the library scrolls
     // as one grid with the header, so the header does not keep a strip of the screen for itself.
@@ -302,7 +318,7 @@ internal fun HomeScreen(
         }
         if (state is RuntimeState.Ready) {
             Library(state, games, layout, title, onLaunch, { state.update?.let(onInstall) }, onShareLogs, onOpenProtons, onOpenDetails, coverOf,
-                tab, onSelectTab, storeTab, storeActions, storeCoverOf)
+                tab, onSelectTab, storeTab, storeActions, storeCoverOf, sessionRunning, onStopSession)
         } else {
             Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(layout.padding)) {
                 title()
@@ -390,6 +406,8 @@ private fun Library(
     storeTab: StoreTabState?,
     storeActions: StoreTabActions,
     storeCoverOf: @Composable (StoreGame) -> Bitmap?,
+    sessionRunning: Boolean,
+    onStopSession: (() -> Unit)?,
 ) {
     val full: LazyGridItemSpanScope.() -> GridItemSpan = { GridItemSpan(maxLineSpan) }
     val tabs = listOf<Store?>(null) + Store.entries
@@ -415,7 +433,10 @@ private fun Library(
             // One line whatever the width: on a narrow screen it scrolls sideways instead of wrapping.
             Row(Modifier.horizontalScroll(rememberScrollState()), verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(layout.gap)) {
-                FocusedButton("Launch SteamOS", requestFocus = true, fontSize = layout.buttonText) { onLaunch(null) }
+                FocusedButton(if (sessionRunning) "Resume SteamOS" else "Launch SteamOS", requestFocus = true, fontSize = layout.buttonText) {
+                    onLaunch(null)
+                }
+                if (sessionRunning && onStopSession != null) OutlinedButton(onClick = onStopSession) { Text("Stop SteamOS") }
                 if (s.update != null) OutlinedButton(onClick = onUpdate) { Text("Update runtime to ${s.update.version}") }
                 if (onOpenProtons != null) OutlinedButton(onClick = onOpenProtons) { Text("Compatibility tools") }
                 if (onShareLogs != null) OutlinedButton(onClick = onShareLogs) { Text("Share logs") }
