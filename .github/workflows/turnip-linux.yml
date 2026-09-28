@@ -57,6 +57,12 @@ jobs:
             libxcb1-dev libxcb-dri3-dev libxcb-present-dev libxcb-randr0-dev libxcb-sync-dev \
             libxcb-xfixes0-dev libxcb-shm0-dev libxcb-keysyms1-dev >/dev/null
           pip3 install --break-system-packages -q 'meson>=1.4' mako pyyaml packaging
+          # Mesa main wants wayland-scanner >= 1.23; Ubuntu 24.04 has 1.22.
+          git clone -q --depth 1 -b 1.24.0 https://gitlab.freedesktop.org/wayland/wayland.git /tmp/wayland
+          meson setup /tmp/wayland/build /tmp/wayland --prefix /usr/local -Ddocumentation=false -Dtests=false -Ddtd_validation=false >/dev/null
+          sudo ninja -C /tmp/wayland/build install >/dev/null
+          sudo ldconfig
+          pkg-config --modversion wayland-scanner
 
       - name: Build
         run: linux/turnip/build.sh "${{ matrix.variant }}" "${{ inputs.mesa_repo || 'https://gitlab.freedesktop.org/mesa/mesa.git' }}" "${{ inputs.mesa_ref || 'main' }}" out

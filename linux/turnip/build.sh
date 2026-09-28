@@ -33,15 +33,18 @@ version=$(cat VERSION)
 case $variant in
   a7xx) ;;
   a6xx)
-    sed -i 's/tu_bo_init_new_cached/tu_bo_init_new/g' src/freedreno/vulkan/tu_query.cc
-    sed -i 's/physical_device->has_cached_coherent_memory = .*/physical_device->has_cached_coherent_memory = false;/' \
-      src/freedreno/vulkan/tu_device.cc
-    grep -rl VK_MEMORY_PROPERTY_HOST_CACHED_BIT src/freedreno/vulkan/ | while read -r f; do
-      sed -i 's/dev->physical_device->has_cached_coherent_memory ? VK_MEMORY_PROPERTY_HOST_CACHED_BIT : 0/0/g' "$f"
-      sed -i 's/VK_MEMORY_PROPERTY_HOST_CACHED_BIT/0/g' "$f"
-    done
-    grep -q 'if (TU_DEBUG(SYSMEM)) {' src/freedreno/vulkan/tu_cmd_buffer.cc
-    sed -i '/if (TU_DEBUG(SYSMEM)) {/i \   return true;' src/freedreno/vulkan/tu_cmd_buffer.cc
+    # Found by what they contain, not by file name: Mesa moves these between releases. Each change
+    # must land somewhere, or the variant would quietly be the a7xx build.
+    tu=src/freedreno/vulkan
+    edit() { # <pattern> <sed expression>
+      local files
+      files=$(grep -rlF -- "$1" "$tu") || { echo "a6xx: '$1' is gone from $tu" >&2; exit 1; }
+      sed -i "$2" $files
+    }
+    edit tu_bo_init_new_cached 's/tu_bo_init_new_cached/tu_bo_init_new/g'
+    edit 'has_cached_coherent_memory =' 's/physical_device->has_cached_coherent_memory = .*/physical_device->has_cached_coherent_memory = false;/'
+    edit VK_MEMORY_PROPERTY_HOST_CACHED_BIT 's/dev->physical_device->has_cached_coherent_memory ? VK_MEMORY_PROPERTY_HOST_CACHED_BIT : 0/0/g; s/VK_MEMORY_PROPERTY_HOST_CACHED_BIT/0/g'
+    edit 'if (TU_DEBUG(SYSMEM)) {' '/if (TU_DEBUG(SYSMEM)) {/i \   return true;'
     ;;
   *) echo "unknown variant $variant" >&2; exit 64 ;;
 esac
