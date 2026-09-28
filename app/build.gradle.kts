@@ -85,6 +85,8 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
     implementation("org.apache.commons:commons-compress:1.21")
     implementation("com.github.luben:zstd-jni:1.5.2-3@aar")
+    // XZ for imported .wcp packages, which commons-compress reads through this library.
+    implementation("org.tukaani:xz:1.9")
 
     testImplementation("junit:junit:4.13.2")
 }

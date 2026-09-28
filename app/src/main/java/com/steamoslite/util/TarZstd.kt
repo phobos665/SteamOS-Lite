@@ -2,6 +2,7 @@ package com.steamoslite.util
 
 import android.content.Context
 import org.apache.commons.compress.archivers.tar.TarArchiveInputStream
+import org.apache.commons.compress.compressors.xz.XZCompressorInputStream
 import org.apache.commons.compress.compressors.zstandard.ZstdCompressorInputStream
 import java.io.BufferedInputStream
 import java.io.File
@@ -13,12 +14,23 @@ object TarZstd {
     fun extractAsset(context: Context, asset: String, destination: File) =
         context.assets.open(asset).use { extract(it, destination) }
 
-    /** Unpacks a zstd-compressed tar read from [input] into [destination]. */
+    /**
+     * Unpacks a compressed tar read from [input] into [destination]: zstd, or XZ, which is what
+     * many Winlator .wcp packages use. Told apart by their magic bytes, not the file name.
+     */
     fun extract(input: InputStream, destination: File) {
         destination.mkdirs()
         val base = destination.canonicalPath + File.separator
-        input.let { raw ->
-            TarArchiveInputStream(ZstdCompressorInputStream(BufferedInputStream(raw, 1 shl 16))).use { tar ->
+        val buffered = BufferedInputStream(input, 1 shl 16)
+        buffered.mark(6)
+        val magic = ByteArray(6)
+        val read = buffered.read(magic)
+        buffered.reset()
+        val xz = read == 6 && magic.contentEquals(byteArrayOf(0xFD.toByte(), '7'.code.toByte(), 'z'.code.toByte(),
+            'X'.code.toByte(), 'Z'.code.toByte(), 0))
+        val decompressed = if (xz) XZCompressorInputStream(buffered) else ZstdCompressorInputStream(buffered)
+        run {
+            TarArchiveInputStream(decompressed).use { tar ->
                 while (true) {
                     val entry = tar.nextTarEntry ?: break
                     val file = File(destination, entry.name)

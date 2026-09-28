@@ -69,7 +69,10 @@ abstract class ComponentStore(val kind: String) {
 
     /** Unpacks a package the user picked; returns the version it is listed as (its file name). */
     fun import(context: Context, uri: Uri, name: String): String {
-        val version = name.replace(IMPORTABLE, "").removePrefix("$kind-")
+        // "FEXCore-2609.wcp", "fexcore-2605.tzst", "FEX-2508.wcp" and "dxvk-2.7.1.tzst" all list by
+        // their version alone.
+        val version = name.replace(IMPORTABLE, "")
+            .replace(Regex("""^(${Regex.escape(kind)}|fex)[-_]""", RegexOption.IGNORE_CASE), "")
             .replace(Regex("""[^A-Za-z0-9._+-]"""), "_").trim('.').ifEmpty { "imported" }
         val root = root(context)
         val staging = File(root, ".import")
