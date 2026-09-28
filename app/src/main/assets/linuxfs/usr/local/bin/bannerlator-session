@@ -196,7 +196,7 @@ case $mode in
     fi
 
     # The client's files are set up by separate helpers that each write their own file, so they run
-    # side by side: each Python start costs seconds under proot. The app's non-Steam shortcuts go
+    # side by side: a Python start under proot can take seconds. The app's non-Steam shortcuts go
     # in while the client is down (it rewrites shortcuts.vdf itself), and before the registrar,
     # which maps their ids to our Proton. Steam runs a game's shared redistributables inside its
     # prefix on first launch; the seeder marks them as already run so those x86 installers never
