@@ -6,12 +6,14 @@ import com.steamoslite.stores.DownloadProgress
 import com.steamoslite.stores.Installation
 import com.steamoslite.stores.Net
 import com.steamoslite.stores.StoreGame
+import com.steamoslite.stores.gog.api.Depot
 import com.steamoslite.stores.gog.api.DepotDirectory
 import com.steamoslite.stores.gog.api.DepotFile
 import com.steamoslite.stores.gog.api.DepotLink
 import com.steamoslite.stores.gog.api.FileChunk
 import com.steamoslite.stores.gog.api.GOGApiClient
 import com.steamoslite.stores.gog.api.GOGManifestParser
+import com.steamoslite.stores.gog.api.V1DepotFile
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
@@ -44,8 +46,8 @@ object GOGDownloader {
     private class HttpStatus(val code: Int) : Exception("HTTP $code")
 
     /**
-     * Downloads [game]'s Windows build (Galaxy "generation 2") into [installDir] and returns how it
-     * starts. Files already on disk with the manifest's MD5 are kept, so a download resumes.
+     * Downloads [game]'s Windows build into [installDir] and returns how it starts. Files already on
+     * disk with the manifest's MD5 are kept, so a download resumes.
      */
     suspend fun download(
         context: Context,
@@ -59,15 +61,21 @@ object GOGDownloader {
         val api = GOGApiClient(context, parser)
 
         progress.stage = "Fetching builds"
-        val builds = api.getBuildsForGame(game.id, "windows", generation = 2).getOrThrow()
-        val build = parser.selectBuild(builds.items, preferredGeneration = 2, platform = "windows")
-            ?: throw Exception("GOG has no current Windows build of this game (older-format builds are not supported yet)")
+        val build = parser.selectBuild(api.getBuildsForGame(game.id, "windows", generation = 2).getOrThrow().items, 2, "windows")
+            ?: parser.selectBuild(api.getBuildsForGame(game.id, "windows", generation = 1).getOrThrow().items, 1, "windows")
+            ?: throw Exception("GOG has no Windows build of this game")
 
         progress.stage = "Fetching the manifest"
         val manifest = api.fetchManifest(build.link).getOrThrow()
         val owned = GOGLibraryClient.getGameIds(context).getOrThrow().toSet()
         val depots = parser.filterDepotsByOwnership(parser.filterDepotsByLanguage(manifest, language).first, owned)
         if (depots.isEmpty()) throw Exception("No depots of this game are owned for this language")
+
+        val timestamp = manifest.productTimestamp
+        if (build.generation == 1 && timestamp != null) {
+            val size = downloadGen1(api, parser, depots.filter { it.productId == manifest.baseProductId }, build.platform, timestamp, installDir, progress)
+            return@withContext installation(installDir, game, guestDir, size, build.versionName)
+        }
 
         data class Owned(val file: DepotFile, val productId: String)
         val all = mutableListOf<Owned>()
@@ -159,16 +167,133 @@ object GOGDownloader {
         }
         cacheDir.deleteRecursively()
         createDirectoriesAndLinks(installDir, directories, links)
+        installation(installDir, game, guestDir, files.sumOf { f -> f.chunks.sumOf { it.size } }, build.versionName)
+    }
 
+    private fun installation(installDir: File, game: StoreGame, guestDir: String, size: Long, version: String): Installation {
         val task = GOGManager.primaryPlayTask(installDir, game.id)
-        Installation(
+        return Installation(
             guestDir = guestDir,
             exe = task?.path ?: "",
             args = task?.arguments ?: "",
             workingDir = task?.workingDir ?: "",
-            sizeBytes = files.sumOf { f -> f.chunks.sumOf { it.size } },
-            version = build.versionName,
+            sizeBytes = size,
+            version = version,
         )
+    }
+
+    /**
+     * Older builds keep each depot as one main.bin: a file is the byte range [offset, offset+size)
+     * of it, fetched with a Range request and checked against its MD5. Returns the install size.
+     */
+    private suspend fun downloadGen1(
+        api: GOGApiClient,
+        parser: GOGManifestParser,
+        depots: List<Depot>,
+        platform: String,
+        timestamp: String,
+        installDir: File,
+        progress: DownloadProgress,
+    ): Long {
+        data class Entry(val file: V1DepotFile, val productId: String)
+        val entries = mutableListOf<Entry>()
+        for ((index, depot) in depots.withIndex()) {
+            progress.checkActive()
+            progress.stage = "Fetching depot ${index + 1} of ${depots.size}"
+            val json = api.fetchDepotManifestV1(depot.productId, platform, timestamp, depot.manifest).getOrThrow()
+            parser.parseV1DepotManifest(json).filter { !it.isSupport }.forEach { entries += Entry(it, depot.productId) }
+        }
+        if (entries.isEmpty()) throw Exception("The build lists no files")
+
+        installDir.mkdirs()
+        progress.stage = "Checking existing files"
+        val pending = entries.filter { (file) ->
+            progress.checkActive()
+            !fileMatches(File(installDir, file.path), file.size, file.hash)
+        }
+        progress.bytesTotal = pending.sumOf { it.file.size }
+        progress.bytesDone.set(0)
+
+        val products = pending.map { it.productId }.toSet()
+        suspend fun mainBins() = products.associateWith { product ->
+            val base = api.getSecureLink(product, "/$platform/$timestamp/", generation = 1).getOrThrow().urls.firstOrNull()
+                ?: throw Exception("GOG returned no download link")
+            val q = base.indexOf('?')
+            if (q < 0) base.trimEnd('/') + "/main.bin" else base.substring(0, q).trimEnd('/') + "/main.bin" + base.substring(q)
+        }
+        val linkLock = Mutex()
+        var mainBin = mainBins()
+
+        val http = Net.httpForParallelDownloads(PARALLEL)
+        val gate = Semaphore(PARALLEL)
+        progress.stage = "Downloading"
+        coroutineScope {
+            pending.map { (file, product) ->
+                async {
+                    gate.withPermit {
+                        val out = File(installDir, file.path)
+                        out.parentFile?.mkdirs()
+                        if (file.size == 0L) {
+                            out.writeBytes(ByteArray(0))
+                            return@withPermit
+                        }
+                        val offset = file.offset ?: throw Exception("${file.path} has no offset in main.bin")
+                        var attempt = 0
+                        while (true) {
+                            progress.checkActive()
+                            try {
+                                downloadRange(http, mainBin.getValue(product), offset, file.size, file.hash, out, progress)
+                                break
+                            } catch (e: Exception) {
+                                if (e is DownloadCancelled || ++attempt >= MAX_CHUNK_RETRIES) throw e
+                                if (e is HttpStatus && (e.code == 401 || e.code == 403)) {
+                                    linkLock.withLock { mainBin = mainBins() }
+                                }
+                                delay(RETRY_DELAY_MS * (1 shl attempt))
+                            }
+                        }
+                    }
+                }
+            }.awaitAll()
+        }
+        return entries.sumOf { it.file.size }
+    }
+
+    private fun downloadRange(http: OkHttpClient, url: String, offset: Long, size: Long, md5: String, out: File, progress: DownloadProgress) {
+        val request = Request.Builder().url(url)
+            .header("User-Agent", "GOG Galaxy")
+            .header("Range", "bytes=$offset-${offset + size - 1}")
+            .build()
+        val digest = MessageDigest.getInstance("MD5")
+        var got = 0L
+        try {
+            http.newCall(request).execute().use { response ->
+                if (!response.isSuccessful) throw HttpStatus(response.code)
+                if (response.code != 206 && offset != 0L) throw Exception("The server ignored the byte range")
+                response.body!!.byteStream().use { input ->
+                    out.outputStream().buffered().use { output ->
+                        val buffer = ByteArray(65536)
+                        while (true) {
+                            progress.checkActive()
+                            val n = input.read(buffer)
+                            if (n == -1) break
+                            digest.update(buffer, 0, n)
+                            output.write(buffer, 0, n)
+                            got += n
+                            progress.bytesDone.addAndGet(n.toLong())
+                        }
+                    }
+                }
+            }
+            if (got != size) throw Exception("${out.name}: got $got of $size bytes")
+            if (md5.isNotEmpty() && !digest.digest().joinToString("") { "%02x".format(it) }.equals(md5, ignoreCase = true)) {
+                throw Exception("${out.name} failed verification")
+            }
+        } catch (e: Exception) {
+            progress.bytesDone.addAndGet(-got)
+            out.delete()
+            throw e
+        }
     }
 
     private suspend fun secureLinks(api: GOGApiClient, products: Set<String>): Map<String, List<String>> =
