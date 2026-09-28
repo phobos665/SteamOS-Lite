@@ -118,6 +118,19 @@ class Screenshots {
         }
     }
 
+    /** A phone on its side: 2400 x 1080 at xxhdpi is only 360 dp tall. */
+    @Test fun library_phone_landscape() {
+        paparazzi.unsafeUpdateConfig(
+            deviceConfig = DeviceConfig.PIXEL_5.copy(
+                screenWidth = 2400,
+                screenHeight = 1080,
+                density = Density.XXHIGH,
+                orientation = ScreenOrientation.LANDSCAPE,
+            ),
+        )
+        home(RuntimeState.Ready("r9", null), shareLogs = true)
+    }
+
     @Test fun library_update_available() = home(RuntimeState.Ready("r8", release))
 
     @Test fun library_empty() = home(RuntimeState.Ready("r9", null), withGames = false)

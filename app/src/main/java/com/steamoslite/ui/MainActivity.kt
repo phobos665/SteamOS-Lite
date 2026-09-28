@@ -1,74 +1,82 @@
 package com.steamoslite.ui
 
-import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.Manifest
 import android.os.Bundle
 import android.view.KeyEvent
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.combinedClickable
-import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.interaction.collectIsFocusedAsState
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.grid.GridCells
-import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.grid.LazyGridItemSpanScope
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.Icons
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
-import androidx.compose.material3.Icon
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.darkColorScheme
+import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.darkColorScheme
-import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
-import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
-import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.onKeyEvent
 import androidx.compose.ui.input.key.type
-import androidx.compose.ui.focus.focusRequester
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.unit.TextUnit
 import com.steamoslite.frontend.FrontendExport
 import com.steamoslite.frontend.HomeShortcuts
 import com.steamoslite.games.InstalledGame
@@ -77,10 +85,10 @@ import com.steamoslite.runtime.InstallService
 import com.steamoslite.runtime.InstallStatus
 import com.steamoslite.runtime.RuntimeInstaller
 import com.steamoslite.util.LogShare
+import java.io.File
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import java.io.File
 
 /**
  * Home: install the runtime once, then launch SteamOS or go straight into an installed game.
@@ -226,29 +234,63 @@ internal fun HomeScreen(
     onOpenSettings: (() -> Unit)? = null,
     coverOf: @Composable (InstalledGame) -> Bitmap? = { loadCover(it) },
 ) {
-    Column(Modifier.fillMaxSize().padding(24.dp)) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text("SteamOS Lite", fontSize = 28.sp, fontWeight = FontWeight.Bold, color = Color.White,
-                modifier = Modifier.weight(1f))
-            if (onOpenSettings != null) {
-                OutlinedButton(onClick = onOpenSettings) {
-                    Icon(Icons.Filled.Settings, contentDescription = null)
-                    Spacer(Modifier.width(8.dp))
-                    Text("Settings")
+    // Phones in landscape have little height: everything is sized from it, and the library scrolls
+    // as one grid with the header, so the header does not keep a strip of the screen for itself.
+    BoxWithConstraints(Modifier.fillMaxSize()) {
+        val layout = HomeLayout.of(maxHeight)
+        val title: @Composable () -> Unit = {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("SteamOS Lite", fontSize = layout.titleSize, fontWeight = FontWeight.Bold, color = Color.White,
+                    modifier = Modifier.weight(1f))
+                if (onOpenSettings != null) {
+                    OutlinedButton(onClick = onOpenSettings) {
+                        Icon(Icons.Filled.Settings, contentDescription = null)
+                        Spacer(Modifier.width(8.dp))
+                        Text("Settings")
+                    }
                 }
             }
         }
-        Spacer(Modifier.height(16.dp))
-        when (state) {
-            RuntimeState.Checking -> Text("Checking…", color = Color.Gray)
-            is RuntimeState.Missing -> Setup(state.release, state.partialBytes, onInstall)
-            is RuntimeState.Installing -> Progress(state, onCancel)
-            is RuntimeState.Failed -> {
-                Text(state.message, color = Color(0xFFFF8080))
-                Spacer(Modifier.height(12.dp))
-                FocusedButton("Try again", onClick = onRetry)
+        if (state is RuntimeState.Ready) {
+            Library(state, games, layout, title, onLaunch, { state.update?.let(onInstall) }, onShareLogs, onOpenProtons, onPinGame, coverOf)
+        } else {
+            Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(layout.padding)) {
+                title()
+                Spacer(Modifier.height(layout.gap))
+                when (state) {
+                    RuntimeState.Checking -> Text("Checking…", color = Color.Gray)
+                    is RuntimeState.Missing -> Setup(state.release, state.partialBytes, onInstall)
+                    is RuntimeState.Installing -> Progress(state, onCancel)
+                    is RuntimeState.Failed -> {
+                        Text(state.message, color = Color(0xFFFF8080))
+                        Spacer(Modifier.height(12.dp))
+                        FocusedButton("Try again", onClick = onRetry)
+                    }
+                    is RuntimeState.Ready -> {}
+                }
             }
-            is RuntimeState.Ready -> Library(state, games, onLaunch, { state.update?.let(onInstall) }, onShareLogs, onOpenProtons, onPinGame, coverOf)
+        }
+    }
+}
+
+/**
+ * Home's sizes for the screen's height. A landscape phone (~360-420 dp tall) gets small tiles and
+ * tight margins, so a full row of covers fits under the header; a handheld's taller screen keeps
+ * the roomier layout.
+ */
+internal data class HomeLayout(val padding: Dp, val gap: Dp, val titleSize: TextUnit, val buttonText: TextUnit, val tileWidth: Dp) {
+    companion object {
+        fun of(height: Dp): HomeLayout {
+            val compact = height < 480.dp
+            // A tile about half the screen tall (2:3 covers), between 96 and 210 dp.
+            val tileHeight = (height * 0.5f).coerceIn(96.dp, 210.dp)
+            return HomeLayout(
+                padding = if (compact) 12.dp else 24.dp,
+                gap = if (compact) 8.dp else 16.dp,
+                titleSize = if (compact) 20.sp else 28.sp,
+                buttonText = if (compact) 14.sp else 18.sp,
+                tileWidth = tileHeight * (2f / 3f),
+            )
         }
     }
 }
@@ -285,6 +327,8 @@ private fun Progress(s: RuntimeState.Installing, onCancel: () -> Unit) {
 private fun Library(
     s: RuntimeState.Ready,
     games: List<InstalledGame>,
+    layout: HomeLayout,
+    title: @Composable () -> Unit,
     onLaunch: (String?) -> Unit,
     onUpdate: () -> Unit,
     onShareLogs: (() -> Unit)?,
@@ -318,34 +362,33 @@ private fun Library(
             },
         )
     }
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        FocusedButton("Launch SteamOS", requestFocus = true) { onLaunch(null) }
-        if (s.update != null) {
-            Spacer(Modifier.width(16.dp))
-            OutlinedButton(onClick = onUpdate) { Text("Update runtime to ${s.update.version}") }
-        }
-        if (onOpenProtons != null) {
-            Spacer(Modifier.width(16.dp))
-            OutlinedButton(onClick = onOpenProtons) { Text("Compatibility tools") }
-        }
-        if (onShareLogs != null) {
-            Spacer(Modifier.width(16.dp))
-            OutlinedButton(onClick = onShareLogs) { Text("Share logs") }
-        }
-    }
-    Spacer(Modifier.height(24.dp))
-    if (games.isEmpty()) {
-        Text("No games installed yet. Launch SteamOS, sign in and install some - they appear here.", color = Color.Gray)
-        return
-    }
-    Text("Installed", color = Color.LightGray, fontSize = 16.sp)
-    Spacer(Modifier.height(8.dp))
+    val full: LazyGridItemSpanScope.() -> GridItemSpan = { GridItemSpan(maxLineSpan) }
     LazyVerticalGrid(
-        columns = GridCells.Adaptive(140.dp),
-        contentPadding = PaddingValues(4.dp),
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
+        columns = GridCells.Adaptive(layout.tileWidth),
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(layout.padding),
+        horizontalArrangement = Arrangement.spacedBy(layout.gap),
+        verticalArrangement = Arrangement.spacedBy(layout.gap),
     ) {
+        item(key = "title", span = full) { title() }
+        item(key = "actions", span = full) {
+            // One line whatever the width: on a narrow screen it scrolls sideways instead of wrapping.
+            Row(Modifier.horizontalScroll(rememberScrollState()), verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(layout.gap)) {
+                FocusedButton("Launch SteamOS", requestFocus = true, fontSize = layout.buttonText) { onLaunch(null) }
+                if (s.update != null) OutlinedButton(onClick = onUpdate) { Text("Update runtime to ${s.update.version}") }
+                if (onOpenProtons != null) OutlinedButton(onClick = onOpenProtons) { Text("Compatibility tools") }
+                if (onShareLogs != null) OutlinedButton(onClick = onShareLogs) { Text("Share logs") }
+            }
+        }
+        item(key = "label", span = full) {
+            Text(
+                if (games.isEmpty()) "No games installed yet. Launch SteamOS, sign in and install some - they appear here."
+                else "Installed (${games.size})",
+                color = if (games.isEmpty()) Color.Gray else Color.LightGray, fontSize = 16.sp,
+                modifier = Modifier.padding(top = layout.gap / 2),
+            )
+        }
         items(games, key = { it.appId }) { game ->
             GameCard(game, coverOf(game), onMenu = { menuFor = game }) { onLaunch(game.appId) }
         }
@@ -390,13 +433,13 @@ private fun GameCard(game: InstalledGame, cover: Bitmap?, onMenu: () -> Unit, on
 }
 
 @Composable
-private fun FocusedButton(label: String, requestFocus: Boolean = false, onClick: () -> Unit) {
+private fun FocusedButton(label: String, requestFocus: Boolean = false, fontSize: TextUnit = 18.sp, onClick: () -> Unit) {
     val focus = remember { FocusRequester() }
     Button(
         onClick = onClick,
         modifier = Modifier.focusRequester(focus),
         colors = ButtonDefaults.buttonColors(),
-    ) { Text(label, fontSize = 18.sp) }
+    ) { Text(label, fontSize = fontSize) }
     if (requestFocus) LaunchedEffect(Unit) { runCatching { focus.requestFocus() } }
 }
 
