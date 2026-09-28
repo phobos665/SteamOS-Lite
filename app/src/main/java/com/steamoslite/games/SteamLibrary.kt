@@ -2,6 +2,7 @@ package com.steamoslite.games
 
 import android.content.Context
 import com.steamoslite.runtime.LinuxRuntime
+import com.steamoslite.runtime.Session
 import java.io.File
 
 data class InstalledGame(val appId: String, val name: String, val cover: File?)
@@ -29,9 +30,13 @@ object SteamLibrary {
 
     fun installedGames(context: Context): List<InstalledGame> {
         val root = steamRoot(context)
-        val manifests = File(root, "steamapps").listFiles { f -> f.name.matches(Regex("appmanifest_\\d+\\.acf")) }
-            ?: return emptyList()
+        // Internal storage, and the SD card's library when there is one (see Session.sdLibrary).
+        val libraries = listOfNotNull(File(root, "steamapps"), Session.sdLibrary(context)?.let { File(it, "steamapps") })
+        val manifests = libraries.flatMap { dir ->
+            dir.listFiles { f -> f.name.matches(Regex("appmanifest_\\d+\\.acf")) }.orEmpty().asList()
+        }
         return manifests.mapNotNull { parse(it) }
+            .distinctBy { it.first }
             .filter { (appId, name, flags) ->
                 appId !in NOT_GAMES && TOOL_PREFIXES.none { name.startsWith(it) } &&
                     (flags and STATE_FULLY_INSTALLED) != 0

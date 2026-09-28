@@ -1,0 +1,28 @@
+#!/bin/bash
+# Put in front of a non-Steam shortcut's command through its launch options:
+#   /usr/local/bin/bl-store-launch <mode> [args] %command%
+# Steam replaces %command% with the full launch - our Proton, its verb and the program - so this
+# runs natively just before it and can add to it. Modes:
+#   probe   records exactly what Steam handed over (the command, the compat environment) in the
+#           session's logs, then runs it unchanged. The shortcut test uses it to show whether a
+#           shortcut went through our Proton and whether %command% was expanded at all.
+# (Store launches - Epic's per-launch sign-in arguments - are added here later.)
+mode=${1:-}
+shift || true
+case $mode in
+  probe)
+    log="${BL_DEBUG_DIR:-/tmp}/shortcut-probe.log"
+    {
+      echo "== $(date) shortcut launched through bl-store-launch"
+      echo "argc=$#"
+      i=0
+      for a in "$@"; do echo "argv[$i]=$a"; i=$((i + 1)); done
+      env | grep -E '^(SteamAppId|SteamGameId|STEAM_COMPAT_[A-Z_]*|STEAM_COMPAT_TOOL_PATHS|SteamOverlayGameId)=' | sort
+    } >> "$log" 2>&1
+    exec "$@"
+    ;;
+  *)
+    echo "bl-store-launch: unknown mode '$mode'" >&2
+    exec "$@"
+    ;;
+esac

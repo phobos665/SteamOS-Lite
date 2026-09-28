@@ -42,6 +42,7 @@ import com.steamoslite.runtime.Dxvk
 import com.steamoslite.runtime.FexCore
 import com.steamoslite.runtime.Protons
 import com.steamoslite.runtime.Settings
+import com.steamoslite.runtime.SteamShortcuts
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -72,6 +73,7 @@ internal data class SettingsState(
     val onScreen: Boolean = false,
     /** The frontend shortcut folder, or null when exporting is off. */
     val frontendDir: String? = null,
+    val shortcutTest: Boolean = false,
     val message: String? = null,
 )
 
@@ -92,6 +94,7 @@ internal sealed interface SettingsChange {
     data object FrontendPick : SettingsChange
     data class FrontendDir(val path: String?) : SettingsChange
     data object FrontendExportNow : SettingsChange
+    data class ShortcutTest(val on: Boolean) : SettingsChange
 }
 
 /** The screen with its data: every change is saved at once and applies from the next SteamOS start. */
@@ -118,6 +121,7 @@ internal fun SettingsRoute(onBack: () -> Unit) {
                 clientAllCores = Settings.clientAllCores(context),
                 onScreen = Settings.onScreenController(context),
                 frontendDir = FrontendExport.dir(context)?.path,
+                shortcutTest = SteamShortcuts.testEnabled(context),
             )
         }
     }
@@ -199,6 +203,7 @@ internal fun SettingsRoute(onBack: () -> Unit) {
                     is SettingsChange.ProtonLog -> Settings.setProtonLog(context, change.on)
                     is SettingsChange.ClientAllCores -> Settings.setClientAllCores(context, change.on)
                     is SettingsChange.OnScreen -> Settings.setOnScreenController(context, change.on)
+                    is SettingsChange.ShortcutTest -> SteamShortcuts.setTest(context, change.on)
                     is SettingsChange.Import, SettingsChange.FrontendPick, SettingsChange.FrontendExportNow,
                     is SettingsChange.FrontendDir -> {}
                 }
@@ -337,6 +342,17 @@ internal fun SettingsScreen(state: SettingsState, onBack: () -> Unit, onChange: 
                 "Shown when SteamOS starts. The quick menu (back button) shows or hides it at any time.",
                 state.onScreen,
             ) { onChange(SettingsChange.OnScreen(it)) }
+        }
+
+        item { Section("Experimental") }
+        item {
+            Toggle(
+                "Steam shortcut test",
+                "Adds \"SteamOS Lite shortcut test\" (Notepad) to the Steam library as a non-Steam game, to check " +
+                    "that app-made shortcuts work before GOG and Epic games use them. Start SteamOS, run it from the " +
+                    "library, close Notepad, exit, then Share logs (shortcut-probe.log shows how Steam launched it).",
+                state.shortcutTest,
+            ) { onChange(SettingsChange.ShortcutTest(it)) }
         }
     }
 }

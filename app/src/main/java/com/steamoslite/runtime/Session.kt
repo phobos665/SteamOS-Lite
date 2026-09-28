@@ -134,7 +134,13 @@ class Session(
         guest += LinuxRuntime.MODE_STEAM
         appId?.let { guest += "steam://rungameid/$it" }
 
-        val binds = listOf(fakeInputDir.path + ":/dev/input")
+        val binds = mutableListOf(fakeInputDir.path + ":/dev/input")
+        // The SD card's library: the scripts register /mnt/bannerlator-sd with the client as its
+        // "SD Card" library folder, but nothing was bound there, so it never appeared.
+        sdLibrary(context)?.let {
+            binds += it.path + ":" + SD_GUEST_PATH
+            mark("SD card library: $it")
+        }
         val command = LinuxRuntime.command(context, runtimeDir, Environment.getExternalStorageDirectory(), binds, guest)
 
         val hostEnv = HashMap<String, String>()
@@ -280,8 +286,25 @@ class Session(
             "libfakeinput.so" to "usr/local/lib/libfakeinput.so",
         ) + listOf(
             "session", "steam-install", "steam-compat", "steam-library",
-            "seed-redists", "netmanager", "proton-extra",
-        ).map { "usr/local/bin/bannerlator-$it" }.map { it to it }
+            "seed-redists", "netmanager", "proton-extra", "steam-shortcuts",
+        ).map { "usr/local/bin/bannerlator-$it" }.map { it to it } +
+            listOf("usr/local/bin/bl-store-launch").map { it to it }
+
+        const val SD_GUEST_PATH = "/mnt/bannerlator-sd"
+
+        /**
+         * The Steam library folder on the SD card, when one is inserted: the app's own directory on
+         * the card (apps may not write elsewhere on it), created with its steamapps/ so the client
+         * accepts it as a library. Null without a card.
+         */
+        fun sdLibrary(context: Context): File? {
+            val card = context.getExternalFilesDirs(null).drop(1).firstOrNull {
+                it != null && Environment.getExternalStorageState(it) == Environment.MEDIA_MOUNTED
+            } ?: return null
+            val library = File(card, "steam-library")
+            File(library, "steamapps").mkdirs()
+            return library.takeIf { File(it, "steamapps").isDirectory }
+        }
 
         /** The compositor's socket directory; never cleared, and bound into the session. */
         fun xdgRuntimeDir(context: Context) = File(context.filesDir, ".wayland-rt")

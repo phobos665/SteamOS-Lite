@@ -197,6 +197,10 @@ case $mode in
 
     step "registering the app's game library with Steam"
     bannerlator-steam-library "$steam_root" || true
+    # The app's non-Steam shortcuts go in while the client is down (it rewrites shortcuts.vdf
+    # itself), and before the registrar, which maps their ids to our Proton.
+    step "writing the app's shortcuts into the Steam library"
+    bannerlator-steam-shortcuts "$steam_root" || true
     step "setting up the ARM64 Proton compatibility tool"
     bannerlator-steam-compat "$steam_root" || true
     # Steam runs a game's shared redistributables inside its prefix on first launch; marking

@@ -557,9 +557,24 @@ def installed_apps(steam_root):
     return sorted(apps, key=int)
 
 
+SHORTCUT_IDS_FILE = os.path.expanduser("~/.bl-shortcut-ids")
+
+
+def shortcut_apps():
+    """The app's own non-Steam shortcuts (bannerlator-steam-shortcuts lists their ids): the "0"
+    default never applies to a shortcut, so each needs its own mapping to run through our Proton."""
+    try:
+        with open(SHORTCUT_IDS_FILE) as f:
+            return {line.strip() for line in f if line.strip().isdigit()}
+    except OSError:
+        return set()
+
+
 def mapped_apps(steam_root):
-    """Everything to run with this tool: installed titles, owned titles, the anti-cheat runtimes."""
-    apps = set(installed_apps(steam_root)) | (owned_apps() - NOT_GAMES) | set(ANTICHEAT_RUNTIMES)
+    """Everything to run with this tool: installed titles, owned titles, the anti-cheat runtimes,
+    and the app's non-Steam shortcuts."""
+    apps = (set(installed_apps(steam_root)) | (owned_apps() - NOT_GAMES) | set(ANTICHEAT_RUNTIMES)
+            | shortcut_apps())
     return sorted(apps, key=int)
 
 
