@@ -6,12 +6,15 @@ import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.os.Bundle
+import android.view.KeyEvent
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.layout.Arrangement
@@ -32,6 +35,7 @@ import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Icon
 import androidx.compose.material3.ButtonDefaults
@@ -53,6 +57,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.onKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
@@ -63,6 +70,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.steamoslite.frontend.FrontendExport
+import com.steamoslite.frontend.HomeShortcuts
 import com.steamoslite.games.InstalledGame
 import com.steamoslite.games.SteamLibrary
 import com.steamoslite.runtime.InstallService
@@ -189,6 +197,11 @@ private fun Home(resumeCount: Int, onLaunch: (String?) -> Unit, onOpenProtons: (
         },
         onLaunch = onLaunch,
         onShareLogs = if (hasLogs) ({ LogShare.share(context) }) else null,
+        onPinGame = if (HomeShortcuts.supported(context)) ({ game ->
+            if (!HomeShortcuts.pin(context, game)) {
+                Toast.makeText(context, "The home screen did not accept the shortcut.", Toast.LENGTH_LONG).show()
+            }
+        }) else null,
         onOpenProtons = onOpenProtons,
         onOpenSettings = onOpenSettings,
     )
@@ -207,6 +220,8 @@ internal fun HomeScreen(
     onShareLogs: (() -> Unit)? = null,
     /** Opens the compatibility-tools screen; null hides the button. */
     onOpenProtons: (() -> Unit)? = null,
+    /** Pins a game to the launcher's home screen; null leaves that out of the game menu. */
+    onPinGame: ((InstalledGame) -> Unit)? = null,
     /** Opens the settings screen; null hides the cog. */
     onOpenSettings: (() -> Unit)? = null,
     coverOf: @Composable (InstalledGame) -> Bitmap? = { loadCover(it) },
@@ -233,7 +248,7 @@ internal fun HomeScreen(
                 Spacer(Modifier.height(12.dp))
                 FocusedButton("Try again", onClick = onRetry)
             }
-            is RuntimeState.Ready -> Library(state, games, onLaunch, { state.update?.let(onInstall) }, onShareLogs, onOpenProtons, coverOf)
+            is RuntimeState.Ready -> Library(state, games, onLaunch, { state.update?.let(onInstall) }, onShareLogs, onOpenProtons, onPinGame, coverOf)
         }
     }
 }
@@ -274,8 +289,35 @@ private fun Library(
     onUpdate: () -> Unit,
     onShareLogs: (() -> Unit)?,
     onOpenProtons: (() -> Unit)?,
+    onPinGame: ((InstalledGame) -> Unit)?,
     coverOf: @Composable (InstalledGame) -> Bitmap?,
 ) {
+    // The game whose menu is open (long press, or Y / Menu on a pad).
+    var menuFor by remember { mutableStateOf<InstalledGame?>(null) }
+    menuFor?.let { game ->
+        AlertDialog(
+            onDismissRequest = { menuFor = null },
+            title = { Text(game.name) },
+            text = { Text("Add it to the home screen to start it straight into SteamOS from there.") },
+            confirmButton = {
+                FocusedButton("Play", requestFocus = true) {
+                    menuFor = null
+                    onLaunch(game.appId)
+                }
+            },
+            dismissButton = {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    if (onPinGame != null) {
+                        OutlinedButton(onClick = {
+                            menuFor = null
+                            onPinGame(game)
+                        }) { Text("Add to home screen") }
+                    }
+                    OutlinedButton(onClick = { menuFor = null }) { Text("Close") }
+                }
+            },
+        )
+    }
     Row(verticalAlignment = Alignment.CenterVertically) {
         FocusedButton("Launch SteamOS", requestFocus = true) { onLaunch(null) }
         if (s.update != null) {
@@ -304,7 +346,9 @@ private fun Library(
         horizontalArrangement = Arrangement.spacedBy(12.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        items(games, key = { it.appId }) { game -> GameCard(game, coverOf(game)) { onLaunch(game.appId) } }
+        items(games, key = { it.appId }) { game ->
+            GameCard(game, coverOf(game), onMenu = { menuFor = game }) { onLaunch(game.appId) }
+        }
     }
 }
 
@@ -317,8 +361,9 @@ private fun loadCover(game: InstalledGame): Bitmap? {
     return cover
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun GameCard(game: InstalledGame, cover: Bitmap?, onClick: () -> Unit) {
+private fun GameCard(game: InstalledGame, cover: Bitmap?, onMenu: () -> Unit, onClick: () -> Unit) {
     val interaction = remember { MutableInteractionSource() }
     val focused by interaction.collectIsFocusedAsState()
     val shape = RoundedCornerShape(8.dp)
@@ -327,7 +372,13 @@ private fun GameCard(game: InstalledGame, cover: Bitmap?, onClick: () -> Unit) {
             .aspectRatio(2f / 3f)
             .border(if (focused) 3.dp else 0.dp, if (focused) Color.White else Color.Transparent, shape)
             .background(Color(0xFF1E2A36), shape)
-            .clickable(interactionSource = interaction, indication = null, onClick = onClick),
+            .onKeyEvent { e ->
+                val menuKey = e.nativeKeyEvent.keyCode == KeyEvent.KEYCODE_BUTTON_Y ||
+                    e.nativeKeyEvent.keyCode == KeyEvent.KEYCODE_MENU
+                if (menuKey && e.type == KeyEventType.KeyUp) onMenu()
+                menuKey
+            }
+            .combinedClickable(interactionSource = interaction, indication = null, onLongClick = onMenu, onClick = onClick),
         contentAlignment = Alignment.Center,
     ) {
         if (cover != null) {
