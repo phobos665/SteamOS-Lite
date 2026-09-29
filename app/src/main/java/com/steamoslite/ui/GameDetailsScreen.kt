@@ -20,8 +20,6 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
@@ -36,7 +34,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
@@ -53,7 +50,6 @@ import com.steamoslite.games.InstalledGame
 import com.steamoslite.games.StoreDetails
 import com.steamoslite.games.StoreDetailsCache
 import com.steamoslite.util.RemoteImages
-import com.steamoslite.util.SteamFiles
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -192,34 +188,7 @@ private fun androidx.compose.foundation.lazy.LazyListScope.achievementItems(
             }
         }
     }
-    // Unlocked first, most recent at the top; then the rest in the game's own order.
-    val sorted = list.orEmpty().sortedWith(compareByDescending<SteamFiles.Achievement> { it.unlocked }.thenByDescending { it.unlockedAt })
-    items(sorted, key = { "ach-" + it.id }) { a -> AchievementRow(game.appId, a, image) }
-}
-
-@Composable
-private fun AchievementRow(appId: String, a: SteamFiles.Achievement, image: @Composable (Any?, Int) -> Bitmap?) {
-    val secret = a.hidden && !a.unlocked
-    Card(Modifier.fillMaxWidth()) {
-        Row(Modifier.padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
-            val icon = (if (a.unlocked) a.icon else a.iconGray ?: a.icon)?.let { SteamFiles.iconUrl(appId, it) }
-            Box(Modifier.size(48.dp).clip(AppShapes.small).background(AppColors.background)) {
-                image(icon, 128)?.let {
-                    Image(it.asImageBitmap(), null, Modifier.fillMaxSize().alpha(if (a.unlocked) 1f else 0.6f))
-                }
-            }
-            Spacer(Modifier.width(12.dp))
-            Column(Modifier.weight(1f)) {
-                Text(if (secret) "Hidden achievement" else a.name, color = if (a.unlocked) AppColors.text else AppColors.textSecondary, fontSize = 15.sp)
-                val desc = if (secret) "Details are shown once it is unlocked." else a.description
-                if (desc.isNotEmpty()) Text(desc, color = AppColors.textMuted, fontSize = 13.sp)
-            }
-            if (a.unlocked && a.unlockedAt > 0) {
-                Spacer(Modifier.width(12.dp))
-                Text(dateOf(a.unlockedAt), color = AppColors.accent, fontSize = 13.sp, fontWeight = FontWeight.Medium)
-            }
-        }
-    }
+    list?.let { achievementRows(game.appId, it, image) }
 }
 
 @Composable
@@ -253,7 +222,7 @@ private fun facts(d: GameDetails?): List<Pair<String, String>> {
     return out
 }
 
-private fun dateOf(unixSeconds: Long): String = DateFormat.getDateInstance(DateFormat.MEDIUM).format(Date(unixSeconds * 1000))
+internal fun dateOf(unixSeconds: Long): String = DateFormat.getDateInstance(DateFormat.MEDIUM).format(Date(unixSeconds * 1000))
 
 /** A local file or a URL as a bitmap, loaded off the main thread and remembered for the composition. */
 @Composable

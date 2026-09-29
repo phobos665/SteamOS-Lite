@@ -32,19 +32,30 @@ data class StoreDetails(
 object GameDetailsReader {
     fun read(context: Context, game: InstalledGame): GameDetails {
         val root = SteamLibrary.steamRoot(context)
-        val account = SteamFiles.account(File(root, "config/loginusers.vdf"))
-        val accountDir = account?.let { File(root, "userdata/${it.accountId}") }?.takeIf { it.isDirectory }
-            ?: File(root, "userdata").listFiles()?.firstOrNull { it.isDirectory && it.name.toLongOrNull() != null }
+        val accountDir = accountDir(root)
         val playtime = accountDir?.let { SteamFiles.playtime(File(it, "config/localconfig.vdf"), game.appId) }
         val info = game.appId.toLongOrNull()?.let { SteamFiles.appInfo(File(root, "appcache/appinfo.vdf"), it) }
-        val achievements = runCatching {
-            val stats = File(root, "appcache/stats")
-            val schema = File(stats, "UserGameStatsSchema_${game.appId}.bin").takeIf { it.isFile } ?: return@runCatching null
-            val progress = accountDir?.name?.let { File(stats, "UserGameStats_${it}_${game.appId}.bin") }?.takeIf { it.isFile }
-            SteamFiles.achievements(schema.readBytes(), progress?.readBytes())
-        }.getOrNull()
-        return GameDetails(game, SteamLibrary.hero(context, game.appId), playtime, info, achievements)
+        return GameDetails(game, SteamLibrary.hero(context, game.appId), playtime, info, achievements(root, accountDir, game.appId))
     }
+
+    /** Just the achievements, as the client last wrote them; null when it has none for [appId]. */
+    fun achievements(context: Context, appId: String): List<SteamFiles.Achievement>? {
+        val root = SteamLibrary.steamRoot(context)
+        return achievements(root, accountDir(root), appId)
+    }
+
+    private fun accountDir(root: File): File? {
+        val account = SteamFiles.account(File(root, "config/loginusers.vdf"))
+        return account?.let { File(root, "userdata/${it.accountId}") }?.takeIf { it.isDirectory }
+            ?: File(root, "userdata").listFiles()?.firstOrNull { it.isDirectory && it.name.toLongOrNull() != null }
+    }
+
+    private fun achievements(root: File, accountDir: File?, appId: String): List<SteamFiles.Achievement>? = runCatching {
+        val stats = File(root, "appcache/stats")
+        val schema = File(stats, "UserGameStatsSchema_$appId.bin").takeIf { it.isFile } ?: return@runCatching null
+        val progress = accountDir?.name?.let { File(stats, "UserGameStats_${it}_$appId.bin") }?.takeIf { it.isFile }
+        SteamFiles.achievements(schema.readBytes(), progress?.readBytes())
+    }.getOrNull()
 }
 
 /**
