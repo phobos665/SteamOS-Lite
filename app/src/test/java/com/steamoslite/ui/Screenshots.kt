@@ -58,7 +58,7 @@ class Screenshots {
     }
 
     private fun home(state: RuntimeState, withGames: Boolean = true, shareLogs: Boolean = false, running: Boolean = false) = paparazzi.snapshot {
-        AppTheme {
+        AppTheme(stillFrame = true) {
             HomeScreen(
                 state = state,
                 games = if (withGames) games.map { it.first } else emptyList(),
@@ -89,7 +89,7 @@ class Screenshots {
     @Test fun library() = home(RuntimeState.Ready("r9", null), shareLogs = true)
 
     @Test fun compatibility_tools() = paparazzi.snapshot {
-        AppTheme {
+        AppTheme(stillFrame = true) {
             ProtonsScreen(
                 state = ProtonsState(
                     engines = listOf("Proton Experimental (ARM64)"),
@@ -109,7 +109,7 @@ class Screenshots {
     }
 
     @Test fun settings() = paparazzi.snapshot {
-        AppTheme {
+        AppTheme(stillFrame = true) {
             SettingsScreen(
                 SettingsState(
                     nativeResolution = com.steamoslite.runtime.Settings.Resolution(1920, 1080),
@@ -142,7 +142,7 @@ class Screenshots {
             listOf("Finish the prologue.", "Map every outpost.", "Travel 1,000 km.", "Play after midnight.", "Earn every other achievement.")[i],
             hidden, unlocked, if (unlocked) 1_758_000_000L + i * 86_400L else 0L, null, null,
         )
-        AppTheme {
+        AppTheme(stillFrame = true) {
             GameDetailsScreen(
                 game,
                 com.steamoslite.games.GameDetails(
@@ -166,7 +166,7 @@ class Screenshots {
     }
 
     private fun storeTab(state: com.steamoslite.stores.Store.() -> StoreTabState) = paparazzi.snapshot {
-        AppTheme {
+        AppTheme(stillFrame = true) {
             HomeScreen(
                 state = RuntimeState.Ready("r9", null),
                 games = emptyList(),
@@ -189,7 +189,7 @@ class Screenshots {
     }
 
     @Test fun store_game() = paparazzi.snapshot {
-        AppTheme {
+        AppTheme(stillFrame = true) {
             StoreGameScreen(
                 storeGames[1].copy(dlc = listOf(com.steamoslite.stores.StoreDlc("d1", "Frozen Depths"), com.steamoslite.stores.StoreDlc("d2", "Outpost Pack"))), null,
                 com.steamoslite.stores.StoreDownload(com.steamoslite.stores.Store.GOG, "2001", storeGames[1].title, fraction = 0.37f, stage = "Downloading"),
@@ -200,7 +200,7 @@ class Screenshots {
     }
 
     @Test fun game_settings() = paparazzi.snapshot {
-        AppTheme {
+        AppTheme(stillFrame = true) {
             GameSettingsScreen(
                 GameSettingsState(
                     "Aurora Frontier",

@@ -15,10 +15,12 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.graphics.Color
@@ -150,8 +152,11 @@ internal object Motion {
     const val FADE_MS = 240
 }
 
+/** True where only one frame is drawn (the screenshot tests): entrance animations start settled. */
+internal val LocalStillFrame = staticCompositionLocalOf { false }
+
 @Composable
-internal fun AppTheme(content: @Composable () -> Unit) {
+internal fun AppTheme(stillFrame: Boolean = false, content: @Composable () -> Unit) {
     val c = AppColors
     val scheme = darkColorScheme(
         primary = c.accent,
@@ -189,8 +194,10 @@ internal fun AppTheme(content: @Composable () -> Unit) {
         surfaceContainerHigh = c.surfaceHigh,
         surfaceContainerHighest = c.surfaceHigh,
     )
-    MaterialTheme(colorScheme = scheme) {
-        Surface(Modifier.fillMaxSize(), color = c.background, content = content)
+    CompositionLocalProvider(LocalStillFrame provides stillFrame) {
+        MaterialTheme(colorScheme = scheme) {
+            Surface(Modifier.fillMaxSize(), color = c.background, content = content)
+        }
     }
 }
 
@@ -235,8 +242,7 @@ internal fun Modifier.focusHighlight(interaction: InteractionSource, shape: Shap
 /** A page's content fading and rising into place when it is first shown. */
 @Composable
 internal fun Modifier.enterFade(): Modifier {
-    // Previews and the screenshot tests draw a single frame: show it settled.
-    val still = LocalInspectionMode.current
+    val still = LocalInspectionMode.current || LocalStillFrame.current
     val shown = remember { Animatable(if (still) 1f else 0f) }
     LaunchedEffect(Unit) { shown.animateTo(1f, tween(Motion.FADE_MS)) }
     return graphicsLayer {
