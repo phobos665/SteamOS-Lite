@@ -65,6 +65,24 @@ jobs:
           done
           ls -l "$D"
 
+      # The patched gamescope, when its release for this linux/gamescope exists (gamescope.yml
+      # publishes it); without one the runtime's own gamescope is used.
+      - name: Stage the patched gamescope
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag="gamescope-3.16.29-$(find linux/gamescope -type f | sort | xargs cat | sha256sum | cut -c1-12)"
+          if gh release download "$tag" -R "$GITHUB_REPOSITORY" -p gamescope.tzst -p gamescope.tzst.sha256 2>/dev/null; then
+            sha256sum -c gamescope.tzst.sha256
+            tar --use-compress-program=unzstd -xf gamescope.tzst -C app/src/main/assets/linuxfs
+            test -f app/src/main/assets/linuxfs/usr/local/bin/gamescope
+            rm gamescope.tzst gamescope.tzst.sha256
+            echo "staged $tag"
+          else
+            echo "::notice::no $tag release yet; the APK uses the runtime's own gamescope"
+          fi
+
       # Steam Deck mode's performance overlay: Valve's aarch64 mangoapp and the libraries it needs,
       # fetched from Valve's package mirrors and checked against the pinned sha256s.
       - name: Stage mangoapp

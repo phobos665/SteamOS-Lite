@@ -85,6 +85,9 @@ if [ -z "${BL_INSIDE:-}" ]; then
     args+=(-r "$BL_REFRESH")
   fi
   [ "$mode" = steam ] && args+=(-e)
+  # The patched gamescope takes realtime-priority Vulkan queues on request, without CAP_SYS_NICE
+  # (which proot can never have); the runtime's own ignores this.
+  export GAMESCOPE_FORCE_VULKAN_REALTIME=${BL_GAMESCOPE_REALTIME:-1}
   # Deck mode's performance overlay (Quick Access Menu > Performance) is drawn by mangoapp, which
   # gamescope starts beside the client; the client sets the level by rewriting the config file. It
   # starts hidden until the client writes a level. BL_MANGOAPP=0 turns it off.

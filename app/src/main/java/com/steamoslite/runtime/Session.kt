@@ -363,7 +363,7 @@ class Session(
             (listOf("steamos-update", "steamos-select-branch", "steamos-session-select", "jupiter-biosupdate").map { "usr/bin/$it" } +
                 listOf("steamos-priv-write", "steamos-set-timezone", "steamos-update", "steamos-select-branch", "jupiter-biosupdate", "jupiter-dock-updater")
                     .map { "usr/bin/steamos-polkit-helpers/$it" } +
-                listOf("usr/local/bin/mangoapp") +
+                listOf("usr/local/bin/mangoapp", "usr/local/bin/gamescope") +
                 listOf("mangoapp", "libfmt.so.10", "libspdlog.so.1.13", "libglfw.so.3", "libtraceevent.so.1", "libtracefs.so.1")
                     .map { "usr/local/lib/mangoapp/$it" }).map { it to it }
 
