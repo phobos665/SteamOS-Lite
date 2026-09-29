@@ -28,6 +28,7 @@ import com.steamoslite.runtime.FexCore
 import com.steamoslite.runtime.GameSettings
 import com.steamoslite.runtime.GameSettingsStore
 import com.steamoslite.runtime.Settings
+import com.steamoslite.runtime.Vkd3d
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -39,6 +40,9 @@ internal data class GameSettingsState(
     val fex: ComponentPick = ComponentPick(),
     val dxvk: ComponentPick = ComponentPick(),
     val globalPreset: Settings.FexPreset = Settings.FexPreset.INTERMEDIATE,
+    val vkd3d: ComponentPick = ComponentPick(),
+    /** The global feature level, shader model and VKD3D_CONFIG. */
+    val globalVkd3d: Triple<String, String, String> = Triple("12_1", "6_0", Settings.AUTOMATIC),
 )
 
 /** One game's settings. [id] is the id Steam starts it with (see GameSettingsStore). */
@@ -50,7 +54,11 @@ internal fun GameSettingsRoute(id: String, title: String, onBack: () -> Unit) {
     var state by remember(id) { mutableStateOf(GameSettingsState(title)) }
     LaunchedEffect(id) {
         state = withContext(Dispatchers.IO) {
-            GameSettingsState(title, GameSettingsStore.get(context, id), FexCore.pick(context), Dxvk.pick(context), Settings.fexPreset(context))
+            GameSettingsState(
+                title, GameSettingsStore.get(context, id), FexCore.pick(context), Dxvk.pick(context), Settings.fexPreset(context),
+                Vkd3d.pick(context),
+                Triple(Settings.vkd3dFeatureLevel(context), Settings.vkd3dShaderModel(context), Settings.vkd3dConfig(context)),
+            )
         }
     }
     GameSettingsScreen(state, onBack) { changed ->
@@ -90,6 +98,15 @@ internal fun GameSettingsScreen(state: GameSettingsState, onBack: () -> Unit, on
         }
         item { VersionChoice(FexCore, state.fex, s.fexCore) { onChange(s.copy(fexCore = it)) } }
         item { VersionChoice(Dxvk, state.dxvk, s.dxvk) { onChange(s.copy(dxvk = it)) } }
+        item { VersionChoice(Vkd3d, state.vkd3d, s.vkd3d) { onChange(s.copy(vkd3d = it)) } }
+        item {
+            Vkd3dChoices(
+                s.vkd3dFeatureLevel, s.vkd3dShaderModel, s.vkd3dConfig, state.globalVkd3d,
+                onLevel = { onChange(s.copy(vkd3dFeatureLevel = it)) },
+                onModel = { onChange(s.copy(vkd3dShaderModel = it)) },
+                onConfig = { onChange(s.copy(vkd3dConfig = it)) },
+            )
+        }
     }
 }
 
@@ -99,7 +116,11 @@ private fun VersionChoice(store: ComponentStore, pick: ComponentPick, selected: 
     fun name(version: String) = if (version == ComponentStore.PROTONS_OWN) "Proton's own" else version
     Choice(
         "${componentName(store)} version",
-        if (store == Dxvk) "Direct3D 8-11 on Vulkan." else "The x86 emulator Proton runs the game's code with.",
+        when (store) {
+            Dxvk -> "Direct3D 8-11 on Vulkan."
+            Vkd3d -> "Direct3D 12 on Vulkan."
+            else -> "The x86 emulator Proton runs the game's code with."
+        },
         listOf<String?>(null, ComponentStore.PROTONS_OWN) + pick.versions.reversed(), selected,
         label = { it?.let(::name) ?: "Global (${name(pick.selected)})" },
         onSelect = onSelect,

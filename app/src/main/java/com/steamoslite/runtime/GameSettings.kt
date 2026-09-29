@@ -13,6 +13,11 @@ data class GameSettings(
     val fexCore: String? = null,
     val dxvk: String? = null,
     val fexPreset: Settings.FexPreset? = null,
+    val vkd3d: String? = null,
+    /** VKD3D-Proton variables; [Settings.AUTOMATIC] unsets the global value for this game. */
+    val vkd3dFeatureLevel: String? = null,
+    val vkd3dShaderModel: String? = null,
+    val vkd3dConfig: String? = null,
 ) {
     val isDefault get() = this == GameSettings()
 
@@ -20,6 +25,10 @@ data class GameSettings(
         fexCore?.let { put("fexCore", it) }
         dxvk?.let { put("dxvk", it) }
         fexPreset?.let { put("fexPreset", it.name) }
+        vkd3d?.let { put("vkd3d", it) }
+        vkd3dFeatureLevel?.let { put("vkd3dFeatureLevel", it) }
+        vkd3dShaderModel?.let { put("vkd3dShaderModel", it) }
+        vkd3dConfig?.let { put("vkd3dConfig", it) }
     }
 
     /** What the Proton launchers read when the game starts: the same variables the session sets globally. */
@@ -27,6 +36,10 @@ data class GameSettings(
         fexCore?.let { append("BL_FEXCORE=").append(it.ifEmpty { "proton" }).append('\n') }
         dxvk?.let { append("BL_DXVK=").append(it.ifEmpty { "proton" }).append('\n') }
         fexPreset?.env?.forEach { (k, v) -> append(k).append('=').append(v).append('\n') }
+        vkd3d?.let { append("BL_VKD3D=").append(it.ifEmpty { "proton" }).append('\n') }
+        vkd3dFeatureLevel?.let { append("VKD3D_FEATURE_LEVEL=").append(it).append('\n') }
+        vkd3dShaderModel?.let { append("VKD3D_SHADER_MODEL=").append(it).append('\n') }
+        vkd3dConfig?.let { append("VKD3D_CONFIG=").append(it).append('\n') }
     }
 
     companion object {
@@ -35,6 +48,10 @@ data class GameSettings(
             dxvk = o.optString("dxvk").takeIf { o.has("dxvk") },
             fexPreset = o.optString("fexPreset").takeIf { it.isNotEmpty() }
                 ?.let { runCatching { Settings.FexPreset.valueOf(it) }.getOrNull() },
+            vkd3d = o.optString("vkd3d").takeIf { o.has("vkd3d") },
+            vkd3dFeatureLevel = o.optString("vkd3dFeatureLevel").takeIf { o.has("vkd3dFeatureLevel") },
+            vkd3dShaderModel = o.optString("vkd3dShaderModel").takeIf { o.has("vkd3dShaderModel") },
+            vkd3dConfig = o.optString("vkd3dConfig").takeIf { o.has("vkd3dConfig") },
         )
     }
 }

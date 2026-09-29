@@ -99,7 +99,9 @@ bl_game_settings() {
   [ -n "$id" ] && [ -f "$f" ] || return 0
   while IFS='=' read -r k v || [ -n "$k" ]; do
     case $k in
-      BL_FEXCORE|BL_DXVK|FEX_[A-Z0-9_]*) export "$k=$v" ;;
+      BL_FEXCORE|BL_DXVK|BL_VKD3D|FEX_[A-Z0-9_]*) export "$k=$v" ;;
+      # Empty: the game leaves it to VKD3D-Proton even where the session sets one.
+      VKD3D_[A-Z0-9_]*|DXVK_[A-Z0-9_]*|TU_DEBUG) if [ -n "$v" ]; then export "$k=$v"; else unset "$k"; fi ;;
     esac
   done < "$f"
   echo "bannerlator-proton: game settings for app $id applied" >&2
@@ -203,62 +205,77 @@ bl_fexcore() {
 # per Proton and is only ever refreshed, never removed: the prefix keeps links into it.
 BL_DXVK_SETUP = """
 bl_mirror() {
-  # $2 becomes a directory of links to every entry of $1 except $3, which the caller fills.
-  mkdir -p "$2" || return 1
-  for l in "$2"/* "$2"/.[!.]*; do
-    [ -L "$l" ] && [ ! -e "$1/${l##*/}" ] && [ ! -L "$1/${l##*/}" ] && rm -f "$l"
+  # $2 becomes a directory of links to every entry of $1 except those named after it, which the
+  # caller fills.
+  src=$1 dst=$2
+  shift 2
+  mkdir -p "$dst" || return 1
+  for l in "$dst"/* "$dst"/.[!.]*; do
+    [ -L "$l" ] && [ ! -e "$src/${l##*/}" ] && [ ! -L "$src/${l##*/}" ] && rm -f "$l"
   done
-  for e in "$1"/* "$1"/.[!.]*; do
+  for e in "$src"/* "$src"/.[!.]*; do
     { [ -e "$e" ] || [ -L "$e" ]; } || continue
     n=${e##*/}
-    [ "$n" = "$3" ] && continue
-    [ -L "$2/$n" ] || [ ! -e "$2/$n" ] || rm -rf "$2/$n"
-    ln -sfn "$e" "$2/$n"
+    case " $* " in *" $n "*) continue ;; esac
+    [ -L "$dst/$n" ] || [ ! -e "$dst/$n" ] || rm -rf "$dst/$n"
+    ln -sfn "$e" "$dst/$n"
+  done
+}
+bl_layer_pkg() {
+  # The chosen package of one translation layer, or nothing for Proton's own.
+  # <wanted version> <package root> <probe dll> <Proton's directory for it> <name>
+  [ -n "$1" ] && [ "$1" != proton ] && [ -n "$2" ] || return 0
+  if [ ! -f "$2/$1/system32/$3" ]; then
+    echo "bannerlator-proton: $5 $1 is not installed in the app; using Proton's own" >&2
+  elif [ ! -d "$4" ]; then
+    echo "bannerlator-proton: this Proton keeps no $5 in ${4#$base/}; using its own" >&2
+  else
+    printf '%s' "$2/$1"
+  fi
+}
+bl_layer_fill() {
+  # <Proton's directory> <mirror's directory> <package, or empty for Proton's own>
+  rm -rf "$2"
+  if [ -z "$3" ]; then
+    ln -sfn "$1" "$2"
+    return 0
+  fi
+  # Proton's own layout, one directory per architecture, each DLL taken from the package where it
+  # has one (64-bit from system32/, 32-bit from syswow64/) and from Proton otherwise, so Proton
+  # finds every file it copies.
+  mkdir -p "$2"
+  for a in "$1"/*; do
+    n=${a##*/}
+    if [ ! -d "$a" ]; then ln -s "$a" "$2/$n"; continue; fi
+    case "$n" in i386-*) from="$3/syswow64" ;; *) from="$3/system32" ;; esac
+    mkdir -p "$2/$n"
+    for f in "$a"/*; do
+      if [ -f "$from/${f##*/}" ]; then ln -s "$from/${f##*/}" "$2/$n/"; else ln -s "$f" "$2/$n/"; fi
+    done
   done
 }
 bl_dxvk() {
   base=$1
   BL_PROTON_BASE=""
-  want=${BL_DXVK:-}
-  [ "$want" = proton ] && want=""
-  [ -n "$want" ] && [ -n "${BL_DXVK_ROOT:-}" ] || return 0
-  pkg="$BL_DXVK_ROOT/$want"
-  real="$base/files/lib/wine/dxvk"
-  if [ ! -f "$pkg/system32/d3d11.dll" ]; then
-    echo "bannerlator-proton: DXVK $want is not installed in the app; using Proton's own" >&2
-    return 0
-  fi
-  if [ ! -d "$real" ]; then
-    echo "bannerlator-proton: this Proton keeps no DXVK in files/lib/wine/dxvk; using its own" >&2
-    return 0
-  fi
+  wine="$base/files/lib/wine"
+  dxvk=$(bl_layer_pkg "${BL_DXVK:-}" "${BL_DXVK_ROOT:-}" d3d11.dll "$wine/dxvk" DXVK)
+  vkd3d=$(bl_layer_pkg "${BL_VKD3D:-}" "${BL_VKD3D_ROOT:-}" d3d12.dll "$wine/vkd3d-proton" VKD3D-Proton)
+  [ -n "$dxvk$vkd3d" ] || return 0
   resolved=$(cd "$base" && pwd -P)
   key="${resolved##*/}-$(printf '%s' "$resolved" | cksum | cut -d' ' -f1)"
   shadow="${XDG_DATA_HOME:-$HOME/.local/share}/bannerlator/proton-mirror/$key"
   bl_mirror "$base" "$shadow" files &&
     bl_mirror "$base/files" "$shadow/files" lib &&
     bl_mirror "$base/files/lib" "$shadow/files/lib" wine &&
-    bl_mirror "$base/files/lib/wine" "$shadow/files/lib/wine" dxvk || {
-      echo "bannerlator-proton: could not mirror $base; using Proton's own DXVK" >&2
+    bl_mirror "$wine" "$shadow/files/lib/wine" dxvk vkd3d-proton || {
+      echo "bannerlator-proton: could not mirror $base; using Proton's own DXVK and VKD3D-Proton" >&2
       return 0
     }
-  # Proton's own layout, one directory per architecture, each DLL taken from the package where it
-  # has one (64-bit from system32/, 32-bit from syswow64/) and from Proton otherwise, so Proton
-  # finds every file it copies.
-  d="$shadow/files/lib/wine/dxvk"
-  rm -rf "$d"
-  mkdir -p "$d"
-  for a in "$real"/*; do
-    n=${a##*/}
-    if [ ! -d "$a" ]; then ln -s "$a" "$d/$n"; continue; fi
-    case "$n" in i386-*) from="$pkg/syswow64" ;; *) from="$pkg/system32" ;; esac
-    mkdir -p "$d/$n"
-    for f in "$a"/*; do
-      if [ -f "$from/${f##*/}" ]; then ln -s "$from/${f##*/}" "$d/$n/"; else ln -s "$f" "$d/$n/"; fi
-    done
-  done
+  [ -d "$wine/dxvk" ] && bl_layer_fill "$wine/dxvk" "$shadow/files/lib/wine/dxvk" "$dxvk"
+  [ -d "$wine/vkd3d-proton" ] && bl_layer_fill "$wine/vkd3d-proton" "$shadow/files/lib/wine/vkd3d-proton" "$vkd3d"
   BL_PROTON_BASE=$shadow
-  echo "bannerlator-proton: DXVK $want (Proton run from $shadow)" >&2
+  dxvk=${dxvk##*/} vkd3d=${vkd3d##*/}
+  echo "bannerlator-proton: DXVK ${dxvk:-proton}, VKD3D-Proton ${vkd3d:-proton} (Proton run from $shadow)" >&2
 }
 """
 

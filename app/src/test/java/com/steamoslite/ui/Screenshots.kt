@@ -6,6 +6,13 @@ import android.graphics.LinearGradient
 import android.graphics.Paint
 import android.graphics.Shader
 import android.graphics.Typeface
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.padding
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
 import app.cash.paparazzi.DeviceConfig
 import app.cash.paparazzi.Paparazzi
 import com.android.resources.Density
@@ -126,6 +133,21 @@ class Screenshots {
                 ),
                 onBack = {},
             ) {}
+        }
+    }
+
+    @Test fun settings_direct3d12() = paparazzi.snapshot {
+        AppTheme(stillFrame = true) {
+            Column(
+                Modifier.fillMaxSize().background(AppColors.background).padding(24.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                Choice(
+                    "VKD3D-Proton version", "Direct3D 12 on Vulkan.",
+                    listOf("", "2.8", "2.13", "2.14.1", "3.0b"), "2.14.1", label = { it.ifEmpty { "Proton's own" } },
+                ) {}
+                Vkd3dChoices("12_1", "6_0", "", global = null, onLevel = {}, onModel = {}, onConfig = {})
+            }
         }
     }
 
