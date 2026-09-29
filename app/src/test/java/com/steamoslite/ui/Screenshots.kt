@@ -6,6 +6,12 @@ import android.graphics.LinearGradient
 import android.graphics.Paint
 import android.graphics.Shader
 import android.graphics.Typeface
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.padding
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
 import app.cash.paparazzi.DeviceConfig
 import app.cash.paparazzi.Paparazzi
 import com.android.resources.Density
@@ -132,6 +138,25 @@ class Screenshots {
                 ),
                 onBack = {},
             ) {}
+        }
+    }
+
+    @Test fun settings_driver() = paparazzi.snapshot {
+        AppTheme(stillFrame = true) {
+            Box(
+                Modifier.fillMaxSize().background(AppColors.background).padding(24.dp),
+            ) {
+                DriverChoice(
+                    SettingsState(
+                        gpu = com.steamoslite.runtime.VulkanDrivers.Gpu("Adreno 740", com.steamoslite.runtime.VulkanDrivers.Family.A7XX),
+                        drivers = listOf(driver),
+                        driver = driver.id,
+                        driverCatalog = listOf("a6xx", "a8xx").map {
+                            com.steamoslite.runtime.VulkanDrivers.CatalogDriver("Turnip-26.3.0-devel-0203514513-$it-Linux", "26.3.0-devel-0203514513", it, "", 0)
+                        } + com.steamoslite.runtime.VulkanDrivers.CatalogDriver("Turnip-26.4.0-devel-1111111111-a7xx-Linux", "26.4.0-devel-1111111111", "a7xx", "", 0),
+                    ),
+                ) {}
+            }
         }
     }
 

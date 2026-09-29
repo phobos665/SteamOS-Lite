@@ -480,7 +480,7 @@ private fun ComponentChoice(store: ComponentStore, pick: ComponentPick, detail: 
  * builds for this device's GPU offered first.
  */
 @Composable
-private fun DriverChoice(state: SettingsState, onChange: (SettingsChange) -> Unit) {
+internal fun DriverChoice(state: SettingsState, onChange: (SettingsChange) -> Unit) {
     val family = state.gpu?.family
     val installed = state.drivers.map { it.id }.toSet()
     val offered = state.driverCatalog.filter { it.id !in installed }.sortedBy { if (it.family == family) 0 else 1 }
