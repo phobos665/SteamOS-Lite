@@ -1,6 +1,14 @@
 package com.steamoslite.ui
 
-import android.app.Activity
+import androidx.activity.ComponentActivity
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.platform.ComposeView
 import android.graphics.Color
 import android.hardware.input.InputManager
 import android.os.Bundle
@@ -38,9 +46,12 @@ import kotlin.concurrent.thread
  * Bannerlator does when it returns from a game. The session itself is held by [SessionHost], so
  * this screen can close while SteamOS keeps running, and a new one picks it up again.
  */
-class SessionActivity : Activity() {
+class SessionActivity : ComponentActivity() {
     private lateinit var surface: SurfaceView
-    private lateinit var status: TextView
+    private lateinit var loadingView: ComposeView
+    private var loading by mutableStateOf(LoadingState())
+    private var loadingShown by mutableStateOf(true)
+    private var art by mutableStateOf(LaunchArt(null, null, null))
     private lateinit var keyboard: KeyboardBridge
     private lateinit var quickMenu: QuickMenu
     private lateinit var onScreen: OnScreenController
@@ -68,7 +79,21 @@ class SessionActivity : Activity() {
         pickHighestRefreshMode()
 
         surface = SurfaceView(this)
-        status = loadingView(this)
+        val appId = intent.getStringExtra(EXTRA_APP_ID)
+        loading = LoadingState(title = appId?.let { "Your game" }, stages = if (appId == null) 3 else 4)
+        loadArt(appId)
+        loadingView = ComposeView(this).apply {
+            setContent {
+                AppTheme {
+                    AnimatedVisibility(loadingShown, enter = fadeIn(tween(300)), exit = fadeOut(tween(400))) {
+                        LoadingScreen(loading, art.cover, art.backdrop) {
+                            timeline.mark("loading screen dismissed with a tap")
+                            hideLoading()
+                        }
+                    }
+                }
+            }
+        }
         keyboard = KeyboardBridge(this)
         controllers = SessionHost.controllers(this)
         onScreen = OnScreenController(this) { controllers.setOnScreen(it) }.apply {
@@ -91,7 +116,7 @@ class SessionActivity : Activity() {
             addView(surface, FrameLayout.LayoutParams(-1, -1))
             addView(keyboard, FrameLayout.LayoutParams(1, 1))
             addView(onScreen, FrameLayout.LayoutParams(-1, -1))
-            addView(status, FrameLayout.LayoutParams(-1, -1))
+            addView(loadingView, FrameLayout.LayoutParams(-1, -1))
             addView(quickMenu, FrameLayout.LayoutParams(-1, -1))
         })
         hideSystemBars()
@@ -151,7 +176,7 @@ class SessionActivity : Activity() {
             } catch (e: Exception) {
                 Log.e(TAG, "session did not start", e)
                 main.post {
-                    status.text = "SteamOS could not start:\n${e.message}"
+                    loading = loading.copy(error = "SteamOS could not start: ${e.message}")
                     main.postDelayed({ finishSession(null) }, 4000)
                 }
             }
@@ -217,15 +242,7 @@ class SessionActivity : Activity() {
                 }.lastOrNull()?.let {
                     step = it
                     detail = ""
-                    if (it.startsWith("starting the Steam client") && !clientStarted) {
-                        clientStarted = true
-                        main.post {
-                            status.setOnClickListener {
-                                timeline.mark("loading screen dismissed with a tap")
-                                status.visibility = View.GONE
-                            }
-                        }
-                    }
+                    if (it.startsWith("starting the Steam client") && !clientStarted) clientStarted = true
                 }
                 if (clientStarted) {
                     val fresh = bootstrap.newLines()
@@ -266,23 +283,25 @@ class SessionActivity : Activity() {
                 if (ready) {
                     timeline.mark("loading screen hidden")
                     timeline.write(SessionHost.session?.logDir)
-                    main.post { status.visibility = View.GONE }
+                    main.post { hideLoading() }
                     return
                 }
             } else {
                 helperSeenAt = 0L
             }
 
-            val text = buildString {
-                append(if (appId == null) "Starting SteamOS…" else "Starting your game…")
-                if (step.isNotEmpty()) append("\n\n").append(step)
-                if (detail.isNotEmpty()) append("\n").append(detail)
-                if (clientStarted) {
-                    append("\n\nThe first start updates Steam itself and can take several minutes.")
-                    append("\nTap to show the screen anyway.")
-                }
+            // The runtime, then Steam, then (for a game) Steam starting it, then the game itself.
+            val stage = when {
+                !clientStarted -> 0
+                helperSeenAt == 0L -> 1
+                gameSeenAt > 0L -> 3
+                else -> 2
             }
-            main.post { if (status.visibility == View.VISIBLE) status.text = text }
+            val shown = detail.ifEmpty {
+                if (clientStarted && helperSeenAt == 0L) "The first start updates Steam itself and can take several minutes." else ""
+            }
+            val currentStep = step
+            main.post { loading = loading.copy(stage = stage, step = currentStep, detail = shown, tapToShow = clientStarted) }
         }
     }
 
@@ -452,15 +471,13 @@ class SessionActivity : Activity() {
         timeline = StartupTimeline(intent.getLongExtra(EXTRA_TAPPED_AT, System.currentTimeMillis()))
         timeline.mark("SteamOS already running")
         if (appId == null) {
-            status.visibility = View.GONE
+            hideLoading()
             return
         }
-        status.visibility = View.VISIBLE
-        status.text = "Starting your game…"
-        status.setOnClickListener {
-            timeline.mark("loading screen dismissed with a tap")
-            status.visibility = View.GONE
-        }
+        art = LaunchArt(null, null, null)
+        loading = LoadingState(title = "Your game", stage = 2, stages = 4, step = "Handing the game to Steam", tapToShow = true)
+        loadArt(appId)
+        showLoading()
         SessionHost.launch(this, appId)
         timeline.mark("game handed to the running client")
         val t = timeline
@@ -475,12 +492,12 @@ class SessionActivity : Activity() {
                 if (game >= GAME_LAUNCHING && launchSeenAt == 0L) {
                     launchSeenAt = now
                     t.mark("Steam launching app $appId")
-                    main.post { status.text = "Starting your game…\n\nSteam is starting the game" }
+                    main.post { loading = loading.copy(step = "Steam is starting the game") }
                 }
                 if (game >= GAME_RUNNING && gameSeenAt == 0L) {
                     gameSeenAt = now
                     t.mark("game process running")
-                    main.post { status.text = "Starting your game…\n\nThe game is starting" }
+                    main.post { loading = loading.copy(stage = 3, step = "The game is starting") }
                 }
                 if ((gameSeenAt > 0 && now - gameSeenAt >= 3000) || (launchSeenAt > 0 && now - launchSeenAt >= 30_000) ||
                     now - started >= 60_000
@@ -488,8 +505,31 @@ class SessionActivity : Activity() {
             }
             t.mark("loading screen hidden")
             t.write(SessionHost.session?.logDir, "launch.txt")
-            main.post { status.visibility = View.GONE }
+            main.post { hideLoading() }
         }
+    }
+
+    /** The loading screen's art and title for [appId], looked up off the main thread. */
+    private fun loadArt(appId: String?) {
+        appId ?: return
+        thread(name = "LaunchArt") {
+            val found = LaunchArt.resolve(applicationContext, appId)
+            main.post {
+                art = found
+                found.title?.let { loading = loading.copy(title = it) }
+            }
+        }
+    }
+
+    private fun showLoading() {
+        loadingView.visibility = View.VISIBLE
+        loadingShown = true
+    }
+
+    /** Fades the loading screen out, then takes it out of the way of touches on the picture. */
+    private fun hideLoading() {
+        loadingShown = false
+        main.postDelayed({ if (!loadingShown) loadingView.visibility = View.GONE }, 450)
     }
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {
@@ -538,14 +578,6 @@ class SessionActivity : Activity() {
     companion object {
         private const val TAG = "SessionActivity"
 
-        /** The loading screen shown over the surface until SteamOS is up. */
-        fun loadingView(context: android.content.Context) = TextView(context).apply {
-            setTextColor(AppColors.textSecondary.toArgb())
-            setBackgroundColor(AppColors.background.toArgb())
-            textSize = 18f
-            gravity = Gravity.CENTER
-            text = "Starting SteamOS…"
-        }
         const val EXTRA_APP_ID = "app_id"
         const val EXTRA_TAPPED_AT = "tapped_at"
         private const val GAME_LAUNCHING = 1
