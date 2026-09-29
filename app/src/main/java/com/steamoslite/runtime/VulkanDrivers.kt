@@ -73,18 +73,16 @@ object VulkanDrivers {
         val body = Downloader.downloadString(RELEASES_URL) ?: return emptyList()
         return runCatching {
             val releases = JSONArray(body)
-            for (i in 0 until releases.length()) {
-                val release = releases.getJSONObject(i)
-                if (!release.optString("tag_name").startsWith(TAG_PREFIX) || release.optBoolean("draft")) continue
-                val assets = release.getJSONArray("assets")
-                return (0 until assets.length()).mapNotNull { j ->
-                    val a = assets.getJSONObject(j)
-                    val name = a.optString("name")
-                    val m = ASSET.matchEntire(name) ?: return@mapNotNull null
-                    CatalogDriver(name.removeSuffix(".zip"), m.groupValues[1], m.groupValues[2], a.optString("browser_download_url"), a.optLong("size"))
-                }.sortedBy { it.variant }
-            }
-            emptyList()
+            val release = (0 until releases.length()).map { releases.getJSONObject(it) }
+                .firstOrNull { it.optString("tag_name").startsWith(TAG_PREFIX) && !it.optBoolean("draft") }
+                ?: return emptyList()
+            val assets = release.getJSONArray("assets")
+            (0 until assets.length()).mapNotNull { j ->
+                val a = assets.getJSONObject(j)
+                val name = a.optString("name")
+                val m = ASSET.matchEntire(name) ?: return@mapNotNull null
+                CatalogDriver(name.removeSuffix(".zip"), m.groupValues[1], m.groupValues[2], a.optString("browser_download_url"), a.optLong("size"))
+            }.sortedBy { it.variant }
         }.getOrDefault(emptyList())
     }
 
