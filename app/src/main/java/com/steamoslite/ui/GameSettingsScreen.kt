@@ -40,6 +40,8 @@ internal data class GameSettingsState(
     val fex: ComponentPick = ComponentPick(),
     val dxvk: ComponentPick = ComponentPick(),
     val globalPreset: Settings.FexPreset = Settings.FexPreset.INTERMEDIATE,
+    val globalLayer: Settings.CompatLayer = Settings.CompatLayer.ARM64,
+    val globalEmulator: Settings.X86Emulator = Settings.X86Emulator.BOX64,
 )
 
 /** One game's settings. [id] is the id Steam starts it with (see GameSettingsStore). */
@@ -51,7 +53,10 @@ internal fun GameSettingsRoute(id: String, title: String, onBack: () -> Unit) {
     var state by remember(id) { mutableStateOf(GameSettingsState(title)) }
     LaunchedEffect(id) {
         state = withContext(Dispatchers.IO) {
-            GameSettingsState(title, GameSettingsStore.get(context, id), FexCore.pick(context), Dxvk.pick(context), Settings.fexPreset(context))
+            GameSettingsState(
+                title, GameSettingsStore.get(context, id), FexCore.pick(context), Dxvk.pick(context),
+                Settings.fexPreset(context), Settings.compatLayer(context), Settings.x86Emulator(context),
+            )
         }
     }
     GameSettingsScreen(state, onBack) { changed ->
@@ -80,6 +85,25 @@ internal fun GameSettingsScreen(state: GameSettingsState, onBack: () -> Unit, on
                     "They take effect the next time the game starts.",
                 color = Color.Gray, fontSize = 14.sp,
             )
+        }
+        item {
+            Choice(
+                "Proton",
+                "ARM64 emulates only the game's own code; x86_64 emulates all of Wine too - slower, but it starts some " +
+                    "games ARM64 cannot. Changing it applies from the next SteamOS start.",
+                listOf<Settings.CompatLayer?>(null) + Settings.CompatLayer.entries, s.compatLayer,
+                label = { it?.label ?: "Global (${state.globalLayer.label})" },
+            ) { onChange(s.copy(compatLayer = it)) }
+        }
+        if ((s.compatLayer ?: state.globalLayer) == Settings.CompatLayer.X86_64) {
+            item {
+                Choice(
+                    "x86 emulator",
+                    "What runs Wine for this game. Try FEX if it misbehaves under Box64.",
+                    listOf<Settings.X86Emulator?>(null) + Settings.X86Emulator.entries, s.x86Emulator,
+                    label = { it?.label ?: "Global (${state.globalEmulator.label})" },
+                ) { onChange(s.copy(x86Emulator = it)) }
+            }
         }
         item {
             Choice(

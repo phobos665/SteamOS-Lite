@@ -99,7 +99,7 @@ bl_game_settings() {
   [ -n "$id" ] && [ -f "$f" ] || return 0
   while IFS='=' read -r k v || [ -n "$k" ]; do
     case $k in
-      BL_FEXCORE|BL_DXVK|FEX_[A-Z0-9_]*) export "$k=$v" ;;
+      BL_FEXCORE|BL_DXVK|BL_X86_EMU|FEX_[A-Z0-9_]*|BOX64_[A-Z0-9_]*) export "$k=$v" ;;
     esac
   done < "$f"
   echo "bannerlator-proton: game settings for app $id applied" >&2
@@ -363,6 +363,102 @@ EXTRA_COMPAT_TOOL_VDF = """"compatibilitytools"
 """
 
 
+# The x86_64 tool: Valve's x86_64 Proton (or any x86_64 Proton in compatibilitytools.d) with its Wine
+# run under an x86 emulator, for games the ARM64 one cannot start. Chosen per game in the app, or
+# for every game; ~/.bl-compat-layers says which (see effective_layers).
+X86_TOOL = "bannerlator-proton-x86_64"
+X86_LAUNCHER = "bannerlator-proton-x86"
+X86_COMPAT_TOOL_VDF = """"compatibilitytools"
+{
+	"compat_tools"
+	{
+		"%s"
+		{
+			"install_path" "."
+			"display_name" "Bannerlator Proton (x86_64, emulated)"
+			"from_oslist" "windows"
+			"to_oslist" "linux"
+		}
+	}
+}
+""" % X86_TOOL
+X86_MANIFEST_VDF = """"manifest"
+{
+	"version" "2"
+	"commandline" "/%s %%verb%%"
+	"use_sessions" "1"
+	"compatmanager_layer_name" "proton"
+}
+""" % X86_LAUNCHER
+
+# Proton itself is a Python script and runs natively. Its Wine is x86_64: the script is run from a
+# mirror of the Proton tree whose files/bin/wine, wine64 and wineserver are small scripts starting
+# the real binary under the emulator. Wine starts every further process by exec'ing its own
+# binaries, which the emulator follows by itself (Box64 re-enters for any x86_64 ELF; FEX emulates
+# the exec). BL_X86_EMU picks the emulator: box64 (the default) or fex.
+X86_LAUNCHER_SH = """#!/bin/bash
+# Bannerlator Proton (x86_64): an x86_64 Proton with its Wine under Box64 or FEX.
+verb=$1; shift
+steam_root=${STEAM_COMPAT_CLIENT_INSTALL_PATH:-${XDG_DATA_HOME:-$HOME/.local/share}/Steam}
+fake=/usr/local/lib/libfakeinput.so
+if [ -f "$fake" ]; then
+  case ":${LD_PRELOAD:-}:" in
+    *":$fake:"*) ;;
+    *) LD_PRELOAD="$fake${LD_PRELOAD:+:$LD_PRELOAD}"; export LD_PRELOAD ;;
+  esac
+fi
+bl_game_settings
+bl_game_cpus
+base=""
+for d in "$steam_root/steamapps/common/Proton - Experimental" "$steam_root"/steamapps/common/Proton* \
+         "$steam_root"/compatibilitytools.d/*; do
+  if [ -x "$d/proton" ] && [ -f "$d/files/bin/wine" ] && [ ! -d "$d/files/bin-arm64" ]; then base=$d; break; fi
+done
+if [ -z "$base" ]; then
+  echo "bannerlator-proton-x86: no x86_64 Proton yet - the session asks the client for Proton Experimental; retry once it has downloaded, or import an x86_64 Proton in the app" >&2
+  exit 1
+fi
+fex=$(command -v FEXInterpreter 2>/dev/null || ls "$steam_root"/steamapps/common/FEX*/*/FEXInterpreter "$steam_root"/steamapps/common/FEX*/FEXInterpreter 2>/dev/null | head -1)
+emu=${BL_X86_EMU:-box64}
+if [ "$emu" = fex ] && [ -z "$fex" ]; then
+  echo "bannerlator-proton-x86: FEX is not installed here; using Box64" >&2
+  emu=box64
+fi
+if [ "$emu" = box64 ] && ! command -v box64 >/dev/null 2>&1; then
+  if [ -n "$fex" ]; then emu=fex; else echo "bannerlator-proton-x86: neither Box64 nor FEX is available" >&2; exit 1; fi
+fi
+guest=/usr/share/guestos/fex-mesa
+case $emu in
+  box64)
+    # x86_64 libraries Box64 does not wrap natively: Proton's own, then the x86_64 guest rootfs.
+    BOX64_LD_LIBRARY_PATH="$base/files/lib/x86_64-linux-gnu:$base/files/lib64:$base/files/lib:$guest/usr/lib/x86_64-linux-gnu:$guest/usr/lib64:$guest/lib/x86_64-linux-gnu:$guest/usr/lib${BOX64_LD_LIBRARY_PATH:+:$BOX64_LD_LIBRARY_PATH}"
+    export BOX64_LD_LIBRARY_PATH BOX64_LOG=${BOX64_LOG:-1}
+    run="$(command -v box64)" ;;
+  fex)
+    [ -d "$guest" ] && export FEX_ROOTFS=${FEX_ROOTFS:-$guest}
+    run=$fex ;;
+esac
+resolved=$(cd "$base" && pwd -P)
+shadow="${XDG_DATA_HOME:-$HOME/.local/share}/bannerlator/proton-x86/${resolved##*/}-$(printf '%s' "$resolved" | cksum | cut -d' ' -f1)"
+bl_mirror "$base" "$shadow" files && bl_mirror "$base/files" "$shadow/files" bin || {
+  echo "bannerlator-proton-x86: could not mirror $base" >&2; exit 1; }
+mkdir -p "$shadow/files/bin"
+for f in "$base"/files/bin/*; do
+  n=${f##*/}
+  rm -f "$shadow/files/bin/$n"
+  case $n in
+    wine|wine64|wineserver)
+      printf '#!/bin/sh\nexec "%s" "%s" "$@"\n' "$run" "$f" > "$shadow/files/bin/$n"
+      chmod 755 "$shadow/files/bin/$n" ;;
+    *) ln -s "$f" "$shadow/files/bin/$n" ;;
+  esac
+done
+echo "bannerlator-proton-x86: $(basename "$base") under $emu" >&2
+exec ${BL_TASKSET:-} "$shadow/proton" "$verb" "$@"
+"""
+X86_LAUNCHER_SH = X86_LAUNCHER_SH.replace(
+    "verb=$1; shift", "verb=$1; shift\n" + BL_GAME_SETTINGS_SETUP + BL_GAME_CPUS_SETUP + BL_DXVK_SETUP, 1)
+
 TOKEN = re.compile(r'\s*(?:"((?:[^"\\]|\\.)*)"|([{}])|//[^\n]*)')
 
 
@@ -597,7 +693,42 @@ def mapped_apps(steam_root):
     return sorted(apps, key=int)
 
 
-def register_default(config_path, apps=(), name=None, protect=()):
+# Which Proton each title runs on, written by the app before the session: "default=<layer>" and
+# "<app id>=<layer>" lines, a layer being arm64 or x86_64.
+COMPAT_LAYERS_FILE = os.path.expanduser("~/.bl-compat-layers")
+
+
+def x86_apps(apps):
+    """The app ids among `apps` set to run on the x86_64 tool."""
+    default, own = "arm64", {}
+    try:
+        with open(COMPAT_LAYERS_FILE) as f:
+            for line in f:
+                key, _, layer = line.strip().partition("=")
+                if key == "default":
+                    default = layer
+                elif key.isdigit():
+                    own[key] = layer
+    except OSError:
+        pass
+    return {a for a in set(apps) | set(own) if own.get(a, default) == "x86_64"}
+
+
+def set_app_tool(tokens, mapping, app, tool):
+    """Points one app's CompatToolMapping entry at `tool`, adding the entry if there is none."""
+    rel = find_block(tokens[mapping + 1:], [app])
+    if rel is None:
+        tokens[mapping + 1:mapping + 1] = [
+            '"%s"' % app, "{", '"name"', '"%s"' % tool, '"config"', '""', '"priority"', '"250"', "}"]
+        return
+    start = mapping + 1 + rel
+    for i in range(start, block_end(tokens, start)):
+        if tokens[i] == '"name"':
+            tokens[i + 1] = '"%s"' % tool
+            return
+
+
+def register_default(config_path, apps=(), name=None, protect=(), x86=()):
     """Writes the mapping. `name` defaults to our own tool; the first-run seed passes Valve's."""
     tool = name or TOOL
     # Tool names the user may deliberately have chosen (see adopt_extras); never repointed.
@@ -630,6 +761,15 @@ def register_default(config_path, apps=(), name=None, protect=()):
                 continue
             tokens[mapping + 1:mapping + 1] = [
                 '"%s"' % app, "{", '"name"', '"%s"' % tool, '"config"', '""', '"priority"', '"250"', "}"]
+        # Titles set to the x86_64 tool, and back: a title no longer set to it returns to ours.
+        for app in x86:
+            set_app_tool(tokens, mapping, app, X86_TOOL)
+        for app in apps:
+            if app not in x86:
+                rel = find_block(tokens[mapping + 1:], [app])
+                start = mapping + 1 + rel if rel is not None else None
+                if start is not None and '"%s"' % X86_TOOL in tokens[start:block_end(tokens, start)]:
+                    set_app_tool(tokens, mapping, app, tool)
     tmp = config_path + ".bannerlator"
     with open(tmp, "w", encoding="utf-8") as f:
         f.write(serialize(tokens))
@@ -665,11 +805,23 @@ def build_tool(tool_dir):
     os.chmod(launcher, 0o755)
 
 
+def build_x86_tool(tool_dir):
+    os.makedirs(tool_dir, exist_ok=True)
+    for name, text, mode in (("toolmanifest.vdf", X86_MANIFEST_VDF, 0o644),
+                             ("compatibilitytool.vdf", X86_COMPAT_TOOL_VDF, 0o644),
+                             (X86_LAUNCHER, X86_LAUNCHER_SH, 0o755)):
+        path = os.path.join(tool_dir, name)
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(text)
+        os.chmod(path, mode)
+
+
 def main():
     steam_root = sys.argv[1]
     tools = os.path.join(steam_root, "compatibilitytools.d")
     os.makedirs(tools, exist_ok=True)
     build_tool(os.path.join(tools, TOOL))
+    build_x86_tool(os.path.join(tools, X86_TOOL))
     extras = adopt_extras(tools)
     for name, directory in sorted(extras.items()):
         print("bannerlator-steam-compat: adopted %s as %s" % (directory, name))
@@ -680,7 +832,10 @@ def main():
     config = os.path.join(steam_root, "config", "config.vdf")
     if os.path.isfile(config):
         apps = mapped_apps(steam_root)
-        register_default(config, apps, protect=extras)
+        x86 = x86_apps(apps)
+        register_default(config, apps, protect=extras, x86=x86)
+        if x86:
+            print("bannerlator-steam-compat: %d app(s) on %s" % (len(x86), X86_TOOL))
         print("bannerlator-steam-compat: default and %d app(s) set to %s (installed + owned + anti-cheat runtimes)" % (len(apps), TOOL))
 
 

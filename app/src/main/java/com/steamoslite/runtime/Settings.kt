@@ -14,6 +14,8 @@ object Settings {
     private const val REFRESH = "refreshHz"
     private const val FPS_LIMIT = "fpsLimit"
     private const val FEX_PRESET = "fexPreset"
+    private const val COMPAT_LAYER = "compatLayer"
+    private const val X86_EMULATOR = "x86Emulator"
     private const val STEAM_UPDATES = "steamUpdates"
     private const val PROTON_LOG = "protonLog"
     private const val CLIENT_ALL_CORES = "clientAllCores"
@@ -83,6 +85,28 @@ object Settings {
         runCatching { FexPreset.valueOf(prefs(context).getString(FEX_PRESET, null)!!) }.getOrDefault(FexPreset.INTERMEDIATE)
 
     fun setFexPreset(context: Context, preset: FexPreset) = put(context) { putString(FEX_PRESET, preset.name) }
+
+    /** Which Proton a Windows game runs on: the native ARM64 one, or an x86_64 one under an emulator. */
+    enum class CompatLayer(val id: String, val label: String) {
+        ARM64("arm64", "Proton ARM64"),
+        X86_64("x86_64", "Proton x86_64"),
+    }
+
+    /** What runs an x86_64 Proton's Wine; the ARM64 Proton uses FEXCore instead. */
+    enum class X86Emulator(val id: String, val label: String) {
+        BOX64("box64", "Box64"),
+        FEX("fex", "FEX"),
+    }
+
+    fun compatLayer(context: Context): CompatLayer =
+        runCatching { CompatLayer.valueOf(prefs(context).getString(COMPAT_LAYER, null)!!) }.getOrDefault(CompatLayer.ARM64)
+
+    fun setCompatLayer(context: Context, layer: CompatLayer) = put(context) { putString(COMPAT_LAYER, layer.name) }
+
+    fun x86Emulator(context: Context): X86Emulator =
+        runCatching { X86Emulator.valueOf(prefs(context).getString(X86_EMULATOR, null)!!) }.getOrDefault(X86Emulator.BOX64)
+
+    fun setX86Emulator(context: Context, emulator: X86Emulator) = put(context) { putString(X86_EMULATOR, emulator.name) }
 
     /** Whether the Steam client checks for its own updates (and verifies its files) at every start. */
     fun steamUpdates(context: Context) = prefs(context).getBoolean(STEAM_UPDATES, true)
