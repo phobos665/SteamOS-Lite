@@ -213,6 +213,54 @@ case $mode in
     if [ ! -f "$steam_root/steamapps/appmanifest_4427310.acf" ]; then
       step "asking the client to fetch the ARM64 Proton"
       set -- "$@" steam://install/4427310
+      # The client picks a title's compatibility tool when the title is installed and keeps its
+      # tool list for the rest of its run, so once the depot has landed it is restarted once (the
+      # loop below knows the marker): everything installed from then on runs through the tool.
+      (
+        _bl_acf="$steam_root/steamapps/appmanifest_4427310.acf"
+        for _ in $(seq 1 360); do
+          sleep 10
+          # StateFlags 4: fully installed; a moment more for the client's own bookkeeping.
+          if grep -q '"StateFlags"[[:space:]]*"4"' "$_bl_acf" 2>/dev/null; then
+            sleep 10
+            bannerlator-steam-compat "$steam_root" >/dev/null 2>&1 || true
+            step "compatibility layer installed: restarting the Steam client once"
+            : > "$HOME/.bl-restart-once"
+            "$steam_root/steamrtarm64/steam" -shutdown >/dev/null 2>&1 || true
+            exit 0
+          fi
+        done
+      ) &
+      # A client that starts signed out drops the request, so on a fresh install it is asked again
+      # after the sign-in - once the client's post-logon compat phase is over, since a request
+      # during it is dropped too - and up to twice more if no install has started a minute later.
+      if ! grep -q '"RememberPassword"[[:space:]]*"1"' "$steam_root/config/loginusers.vdf" 2>/dev/null; then
+        (
+          _bl_acf="$steam_root/steamapps/appmanifest_4427310.acf"
+          _bl_conn="$steam_root/logs/connection_log.txt"
+          _bl_cons="$steam_root/logs/console_log.txt"
+          _bl_from=$(stat -c %s "$_bl_conn" 2>/dev/null || echo 0)
+          _bl_cfrom=$(stat -c %s "$_bl_cons" 2>/dev/null || echo 0)
+          for _ in $(seq 1 180); do
+            sleep 10
+            [ -f "$_bl_acf" ] && exit 0
+            if tail -c +$((_bl_from + 1)) "$_bl_conn" 2>/dev/null | grep -q "RecvMsgClientLogOnResponse() : processing complete"; then
+              for _ in $(seq 1 45); do
+                tail -c +$((_bl_cfrom + 1)) "$_bl_cons" 2>/dev/null | grep -q "Waiting for compat in post-logon took" && break
+                sleep 2
+              done
+              for _bl_try in 1 2 3; do
+                sleep 10
+                [ -f "$_bl_acf" ] && exit 0
+                step "signed in: asking the client again for the ARM64 Proton (try $_bl_try of 3)"
+                "$steam_root/steamrtarm64/steam" steam://install/4427310 >/dev/null 2>&1 || true
+                sleep 50
+              done
+              exit 0
+            fi
+          done
+        ) &
+      fi
     fi
     # Games set to the x86_64 tool run Valve's x86_64 Proton, which the client fetches the same way
     # once any game asks for it (an x86_64 Proton imported into compatibilitytools.d also does).
@@ -375,6 +423,7 @@ BUSCONF
     fi
     # The client exits 42 when it has updated itself and wants a fresh start (steam.sh does this).
     while :; do
+      rm -f "$HOME/.bl-restart-once"
       step "starting the Steam client"
       "$steam_root/steamrtarm64/steam" -gamepadui -clientbeta publicbeta "${update_args[@]}" \
         -no-cef-sandbox -cef-force-gpu -cef-ozone-platform=x11 \
@@ -382,6 +431,13 @@ BUSCONF
       rc=$?
       echo "== steam exited rc=$rc"
       collect_steam_logs
+      # The session asked for this exit (the ARM64 Proton landed): start again without the URL
+      # arguments, which were acted on.
+      if [ -f "$HOME/.bl-restart-once" ]; then
+        echo "== steam: restarting once so the new compatibility layer is in the client's lists"
+        set --
+        continue
+      fi
       [ "$rc" -eq 42 ] || break
     done
     kill ${netmanager:-} ${system_bus:-} ${launch_watch:-} 2>/dev/null || true

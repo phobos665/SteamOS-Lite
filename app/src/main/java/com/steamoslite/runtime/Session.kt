@@ -51,6 +51,7 @@ class Session(
         OrphanReaper.reap(context)
         finishAbandonedLogs(context)
         LinuxRuntime.writeAccounts(context)
+        OfflineMode.apply(context)
 
         // Refreshed every session, so what runs is always what this APK carries.
         TarZstd.extractAsset(context, "pulseaudio.tzst", PulseAudio.workingDir(context))

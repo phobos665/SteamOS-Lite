@@ -39,6 +39,7 @@ import com.steamoslite.runtime.ComponentStore
 import com.steamoslite.runtime.Dxvk
 import com.steamoslite.runtime.FexCore
 import com.steamoslite.runtime.Nightlies
+import com.steamoslite.runtime.OfflineMode
 import com.steamoslite.runtime.Protons
 import com.steamoslite.runtime.Settings
 import com.steamoslite.runtime.SteamShortcuts
@@ -713,6 +714,12 @@ internal enum class SettingFlag(
         "Steam", "Faster Steam interface",
         "Lazy descriptors, threaded GL and no GL error checks for Steam's interface, which draws with OpenGL on Vulkan.",
         true, Settings::clientTuning, Settings::setClientTuning,
+    ),
+    START_OFFLINE(
+        "Steam", "Start Steam offline",
+        "Steam starts without Valve's servers, as the account you last signed in with. Installed games still play; " +
+            "the store, downloads and friends wait until you turn this off.",
+        false, OfflineMode::enabled, OfflineMode::setEnabled,
     ),
     NO_XALIA(
         "Steam", "Skip Proton's xalia helper",
