@@ -61,6 +61,8 @@ internal data class SettingsState(
     val refresh: Int = 0,
     val fpsLimit: Int = 0,
     val fexPreset: Settings.FexPreset = Settings.FexPreset.INTERMEDIATE,
+    val compatLayer: Settings.CompatLayer = Settings.CompatLayer.ARM64,
+    val x86Emulator: Settings.X86Emulator = Settings.X86Emulator.BOX64,
     val fex: ComponentPick = ComponentPick(),
     val dxvk: ComponentPick = ComponentPick(),
     val steamUpdates: Boolean = true,
@@ -80,6 +82,8 @@ internal sealed interface SettingsChange {
     data class Refresh(val hz: Int) : SettingsChange
     data class FpsLimit(val fps: Int) : SettingsChange
     data class FexPreset(val preset: Settings.FexPreset) : SettingsChange
+    data class CompatLayer(val layer: Settings.CompatLayer) : SettingsChange
+    data class X86Emulator(val emulator: Settings.X86Emulator) : SettingsChange
     data class Component(val store: ComponentStore, val version: String) : SettingsChange
     data class Import(val store: ComponentStore) : SettingsChange
     data class Remove(val store: ComponentStore, val version: String) : SettingsChange
@@ -112,6 +116,8 @@ internal fun SettingsRoute(onBack: () -> Unit) {
                 refresh = Settings.refreshChoice(context),
                 fpsLimit = Settings.fpsLimit(context),
                 fexPreset = Settings.fexPreset(context),
+                compatLayer = Settings.compatLayer(context),
+                x86Emulator = Settings.x86Emulator(context),
                 fex = FexCore.pick(context),
                 dxvk = Dxvk.pick(context),
                 steamUpdates = Settings.steamUpdates(context),
@@ -196,6 +202,8 @@ internal fun SettingsRoute(onBack: () -> Unit) {
                     is SettingsChange.Refresh -> Settings.setRefresh(context, change.hz)
                     is SettingsChange.FpsLimit -> Settings.setFpsLimit(context, change.fps)
                     is SettingsChange.FexPreset -> Settings.setFexPreset(context, change.preset)
+                    is SettingsChange.CompatLayer -> Settings.setCompatLayer(context, change.layer)
+                    is SettingsChange.X86Emulator -> Settings.setX86Emulator(context, change.emulator)
                     is SettingsChange.Component -> change.store.select(context, change.version)
                     is SettingsChange.Remove -> change.store.remove(context, change.version)
                     is SettingsChange.SteamUpdates -> Settings.setSteamUpdates(context, change.on)
@@ -259,6 +267,23 @@ internal fun SettingsScreen(state: SettingsState, onBack: () -> Unit, onChange: 
         }
 
         item { Section("Emulation") }
+        item {
+            Choice(
+                "Proton",
+                "Which Proton Windows games run on. ARM64 runs Wine natively and emulates only the game's own code; " +
+                    "x86_64 emulates all of Wine too, which is slower but starts some games ARM64 cannot. " +
+                    "A game can pick its own in its Game settings. Applied from the next SteamOS start.",
+                Settings.CompatLayer.entries, state.compatLayer, label = { it.label },
+            ) { onChange(SettingsChange.CompatLayer(it)) }
+        }
+        item {
+            Choice(
+                "x86 emulator for Proton x86_64",
+                "What runs Wine for games on Proton x86_64. Box64 is usually faster; FEX is the fallback when a game " +
+                    "misbehaves under it. Proton ARM64 always uses FEXCore.",
+                Settings.X86Emulator.entries, state.x86Emulator, label = { it.label },
+            ) { onChange(SettingsChange.X86Emulator(it)) }
+        }
         item {
             Choice(
                 "FEX preset",

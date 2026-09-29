@@ -13,6 +13,8 @@ data class GameSettings(
     val fexCore: String? = null,
     val dxvk: String? = null,
     val fexPreset: Settings.FexPreset? = null,
+    val compatLayer: Settings.CompatLayer? = null,
+    val x86Emulator: Settings.X86Emulator? = null,
 ) {
     val isDefault get() = this == GameSettings()
 
@@ -20,6 +22,8 @@ data class GameSettings(
         fexCore?.let { put("fexCore", it) }
         dxvk?.let { put("dxvk", it) }
         fexPreset?.let { put("fexPreset", it.name) }
+        compatLayer?.let { put("compatLayer", it.name) }
+        x86Emulator?.let { put("x86Emulator", it.name) }
     }
 
     /** What the Proton launchers read when the game starts: the same variables the session sets globally. */
@@ -27,6 +31,7 @@ data class GameSettings(
         fexCore?.let { append("BL_FEXCORE=").append(it.ifEmpty { "proton" }).append('\n') }
         dxvk?.let { append("BL_DXVK=").append(it.ifEmpty { "proton" }).append('\n') }
         fexPreset?.env?.forEach { (k, v) -> append(k).append('=').append(v).append('\n') }
+        x86Emulator?.let { append("BL_X86_EMU=").append(it.id).append('\n') }
     }
 
     companion object {
@@ -35,6 +40,10 @@ data class GameSettings(
             dxvk = o.optString("dxvk").takeIf { o.has("dxvk") },
             fexPreset = o.optString("fexPreset").takeIf { it.isNotEmpty() }
                 ?.let { runCatching { Settings.FexPreset.valueOf(it) }.getOrNull() },
+            compatLayer = o.optString("compatLayer").takeIf { it.isNotEmpty() }
+                ?.let { runCatching { Settings.CompatLayer.valueOf(it) }.getOrNull() },
+            x86Emulator = o.optString("x86Emulator").takeIf { it.isNotEmpty() }
+                ?.let { runCatching { Settings.X86Emulator.valueOf(it) }.getOrNull() },
         )
     }
 }
@@ -65,6 +74,18 @@ object GameSettingsStore {
         FileUtils.writeString(json, settings.toJson().toString())
         env.parentFile?.mkdirs()
         FileUtils.writeString(env, settings.toEnv())
+    }
+
+    /**
+     * ~/.bl-compat-layers, which bannerlator-steam-compat maps each title's Proton from before the
+     * client starts: the global layer, then every game with one of its own.
+     */
+    fun writeCompatLayers(context: Context) {
+        val text = buildString {
+            append("default=").append(Settings.compatLayer(context).id).append('\n')
+            all(context).forEach { (id, s) -> s.compatLayer?.let { append(id).append('=').append(it.id).append('\n') } }
+        }
+        FileUtils.writeString(File(LinuxRuntime.rootDir(context), "root/.bl-compat-layers"), text)
     }
 
     fun all(context: Context): Map<String, GameSettings> =

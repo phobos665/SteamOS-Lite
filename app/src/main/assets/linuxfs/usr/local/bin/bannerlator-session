@@ -214,6 +214,14 @@ case $mode in
       step "asking the client to fetch the ARM64 Proton"
       set -- "$@" steam://install/4427310
     fi
+    # Games set to the x86_64 tool run Valve's x86_64 Proton, which the client fetches the same way
+    # once any game asks for it (an x86_64 Proton imported into compatibilitytools.d also does).
+    if grep -q '=x86_64$' "$HOME/.bl-compat-layers" 2>/dev/null &&
+      ! ls "$steam_root/steamapps/common/Proton - Experimental/files/bin/wine" \
+           "$steam_root"/compatibilitytools.d/*/files/bin/wine >/dev/null 2>&1; then
+      step "asking the client to fetch Proton Experimental (x86_64)"
+      set -- "$@" steam://install/1493710
+    fi
     # The tool is registered before the client starts and finds the depot at launch time, so
     # nothing here waits for a download. What can still change under a running client is which
     # titles are installed: a title installed this session gets the client's own per-app Proton
