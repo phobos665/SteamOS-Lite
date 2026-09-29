@@ -20,8 +20,6 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
@@ -36,7 +34,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
@@ -53,7 +50,6 @@ import com.steamoslite.games.InstalledGame
 import com.steamoslite.games.StoreDetails
 import com.steamoslite.games.StoreDetailsCache
 import com.steamoslite.util.RemoteImages
-import com.steamoslite.util.SteamFiles
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -135,7 +131,8 @@ internal fun GameDetailsScreen(
             }
             item(key = "facts") {
                 FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    facts(details).forEach { (label, value) -> Fact(label, value) }
+                    val complete = details?.achievements?.allUnlocked() == true
+                    facts(details).forEach { (label, value) -> Fact(label, value, trophy = complete && label == "Achievements") }
                 }
             }
             if (store != null && (store.description.isNotEmpty() || store.genres.isNotEmpty())) {
@@ -161,7 +158,7 @@ internal fun GameDetailsScreen(
                     }
                 }
             }
-            achievementItems(details, game, image)
+            achievementItems(details, game, image, if (compact) AchievementDensity.Compact else AchievementDensity.Regular)
         }
     }
 }
@@ -170,6 +167,7 @@ private fun androidx.compose.foundation.lazy.LazyListScope.achievementItems(
     details: GameDetails?,
     game: InstalledGame,
     image: @Composable (Any?, Int) -> Bitmap?,
+    density: AchievementDensity,
 ) {
     val list = details?.achievements
     item(key = "ach-head") {
@@ -185,49 +183,28 @@ private fun androidx.compose.foundation.lazy.LazyListScope.achievementItems(
                 )
                 else -> {
                     val done = list.count { it.unlocked }
-                    Text("$done of ${list.size} unlocked", color = AppColors.textSecondary)
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Text("$done of ${list.size} unlocked", color = AppColors.textSecondary)
+                        if (list.allUnlocked()) Trophy()
+                    }
                     Spacer(Modifier.height(6.dp))
                     LinearProgressIndicator(progress = { done / list.size.toFloat() }, modifier = Modifier.fillMaxWidth().clip(AppShapes.pill))
                 }
             }
         }
     }
-    // Unlocked first, most recent at the top; then the rest in the game's own order.
-    val sorted = list.orEmpty().sortedWith(compareByDescending<SteamFiles.Achievement> { it.unlocked }.thenByDescending { it.unlockedAt })
-    items(sorted, key = { "ach-" + it.id }) { a -> AchievementRow(game.appId, a, image) }
+    list?.let { achievementRows(game.appId, it, image, density) }
 }
 
 @Composable
-private fun AchievementRow(appId: String, a: SteamFiles.Achievement, image: @Composable (Any?, Int) -> Bitmap?) {
-    val secret = a.hidden && !a.unlocked
-    Card(Modifier.fillMaxWidth()) {
-        Row(Modifier.padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
-            val icon = (if (a.unlocked) a.icon else a.iconGray ?: a.icon)?.let { SteamFiles.iconUrl(appId, it) }
-            Box(Modifier.size(48.dp).clip(AppShapes.small).background(AppColors.background)) {
-                image(icon, 128)?.let {
-                    Image(it.asImageBitmap(), null, Modifier.fillMaxSize().alpha(if (a.unlocked) 1f else 0.6f))
-                }
-            }
-            Spacer(Modifier.width(12.dp))
-            Column(Modifier.weight(1f)) {
-                Text(if (secret) "Hidden achievement" else a.name, color = if (a.unlocked) AppColors.text else AppColors.textSecondary, fontSize = 15.sp)
-                val desc = if (secret) "Details are shown once it is unlocked." else a.description
-                if (desc.isNotEmpty()) Text(desc, color = AppColors.textMuted, fontSize = 13.sp)
-            }
-            if (a.unlocked && a.unlockedAt > 0) {
-                Spacer(Modifier.width(12.dp))
-                Text(dateOf(a.unlockedAt), color = AppColors.accent, fontSize = 13.sp, fontWeight = FontWeight.Medium)
-            }
-        }
-    }
-}
-
-@Composable
-private fun Fact(label: String, value: String) {
+private fun Fact(label: String, value: String, trophy: Boolean = false) {
     Card {
         Column(Modifier.padding(horizontal = 14.dp, vertical = 8.dp)) {
             Text(label.uppercase(), color = AppColors.textMuted, fontSize = 11.sp, fontWeight = FontWeight.Medium, letterSpacing = 0.8.sp)
-            Text(value, color = AppColors.text, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text(value, color = AppColors.text, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+                if (trophy) Trophy(16.dp)
+            }
         }
     }
 }
@@ -253,7 +230,7 @@ private fun facts(d: GameDetails?): List<Pair<String, String>> {
     return out
 }
 
-private fun dateOf(unixSeconds: Long): String = DateFormat.getDateInstance(DateFormat.MEDIUM).format(Date(unixSeconds * 1000))
+internal fun dateOf(unixSeconds: Long): String = DateFormat.getDateInstance(DateFormat.MEDIUM).format(Date(unixSeconds * 1000))
 
 /** A local file or a URL as a bitmap, loaded off the main thread and remembered for the composition. */
 @Composable

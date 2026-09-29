@@ -25,11 +25,13 @@ import android.view.WindowManager
 import android.widget.FrameLayout
 import android.widget.TextView
 import androidx.compose.ui.graphics.toArgb
+import com.steamoslite.games.GameDetailsReader
 import com.steamoslite.input.Controllers
 import com.steamoslite.input.OnScreenController
 import com.steamoslite.runtime.Session
 import com.steamoslite.runtime.Settings
 import com.steamoslite.util.FileUtils
+import com.steamoslite.util.SteamFiles
 import com.steamoslite.util.TarZstd
 import com.steamoslite.wayland.WaylandCompositor
 import org.json.JSONObject
@@ -54,6 +56,12 @@ class SessionActivity : ComponentActivity() {
     private var art by mutableStateOf(LaunchArt(null, null, null))
     private lateinit var keyboard: KeyboardBridge
     private lateinit var quickMenu: QuickMenu
+    private lateinit var achievementsView: ComposeView
+    /** The app id whose achievements are showing, or null when they are not. */
+    private var achievementsOf by mutableStateOf<String?>(null)
+    private var achievementsRead by mutableStateOf(false)
+    private var achievements by mutableStateOf<List<SteamFiles.Achievement>?>(null)
+    private var achievementReads = 0
     private lateinit var onScreen: OnScreenController
     private lateinit var controllers: Controllers
     private lateinit var timeline: StartupTimeline
@@ -99,17 +107,15 @@ class SessionActivity : ComponentActivity() {
         onScreen = OnScreenController(this) { controllers.setOnScreen(it) }.apply {
             visibility = if (Settings.onScreenController(this@SessionActivity)) View.VISIBLE else View.GONE
         }
-        quickMenu = QuickMenu(this).apply {
-            val keepRunning = if (SessionHost.running) SessionHost.keepRunning else Settings.keepRunning(this@SessionActivity)
-            setItems("SteamOS", listOfNotNull(
-                QuickMenu.Item({ if (keyboard.keyboardVisible) "Hide keyboard" else "Show keyboard" }) { toggleKeyboard() },
-                QuickMenu.Item({ if (onScreenShown) "Hide on-screen controller" else "Show on-screen controller" }) {
-                    setOnScreenShown(!onScreenShown)
-                },
-                if (keepRunning) QuickMenu.Item({ "Leave SteamOS running" }) { leave() } else null,
-                QuickMenu.Item({ "Exit SteamOS" }) { finishSession(null) },
-                QuickMenu.Item({ "Close menu" }) {},
-            ))
+        quickMenu = QuickMenu(this)
+        setMenuItems()
+        achievementsView = ComposeView(this).apply {
+            visibility = View.GONE
+            setContent {
+                AppTheme(overlay = true) {
+                    achievementsOf?.let { SessionAchievements(it, art.title, achievementsRead, achievements, onClose = ::closeAchievements) }
+                }
+            }
         }
         setContentView(FrameLayout(this).apply {
             setBackgroundColor(Color.BLACK)
@@ -118,6 +124,7 @@ class SessionActivity : ComponentActivity() {
             addView(onScreen, FrameLayout.LayoutParams(-1, -1))
             addView(loadingView, FrameLayout.LayoutParams(-1, -1))
             addView(quickMenu, FrameLayout.LayoutParams(-1, -1))
+            addView(achievementsView, FrameLayout.LayoutParams(-1, -1))
         })
         hideSystemBars()
 
@@ -382,18 +389,32 @@ class SessionActivity : ComponentActivity() {
      * controls; everything else goes on to the views (the touch mouse on the surface, the menu).
      */
     override fun dispatchTouchEvent(event: MotionEvent): Boolean {
-        if (!quickMenu.isOpen && onScreen.handleTouch(event)) return true
+        if (!quickMenu.isOpen && achievementsOf == null && onScreen.handleTouch(event)) return true
         return super.dispatchTouchEvent(event)
     }
 
     override fun dispatchGenericMotionEvent(event: MotionEvent): Boolean {
         // While the menu is open the stick moves its focus (Android turns it into D-pad presses).
-        if (quickMenu.isOpen) return super.dispatchGenericMotionEvent(event)
+        if (quickMenu.isOpen || achievementsOf != null) return super.dispatchGenericMotionEvent(event)
         return controllers.onMotionEvent(event) || super.dispatchGenericMotionEvent(event)
     }
 
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
         val code = event.keyCode
+        if (achievementsOf != null) {
+            // Back to the quick menu; the D-pad moves through the list, and A has nothing to do.
+            when (code) {
+                KeyEvent.KEYCODE_BACK, KeyEvent.KEYCODE_BUTTON_B -> {
+                    if (event.action == KeyEvent.ACTION_UP) {
+                        closeAchievements()
+                        quickMenu.open()
+                    }
+                    return true
+                }
+                KeyEvent.KEYCODE_BUTTON_A -> return true
+            }
+            return super.dispatchKeyEvent(event)
+        }
         if (quickMenu.isOpen) {
             if (code == KeyEvent.KEYCODE_BACK) {
                 if (event.action == KeyEvent.ACTION_UP) quickMenu.close()
@@ -425,6 +446,49 @@ class SessionActivity : ComponentActivity() {
     }
 
     private val onScreenShown get() = onScreen.visibility == View.VISIBLE
+
+    /** The quick menu's actions; Achievements only when the session was started for a Steam game. */
+    private fun setMenuItems() {
+        val keepRunning = if (SessionHost.running) SessionHost.keepRunning else Settings.keepRunning(this)
+        val game = intent.getStringExtra(EXTRA_APP_ID)?.takeIf(::isSteamApp)
+        quickMenu.setItems("SteamOS", listOfNotNull(
+            QuickMenu.Item({ if (keyboard.keyboardVisible) "Hide keyboard" else "Show keyboard" }) { toggleKeyboard() },
+            QuickMenu.Item({ if (onScreenShown) "Hide on-screen controller" else "Show on-screen controller" }) {
+                setOnScreenShown(!onScreenShown)
+            },
+            game?.let { QuickMenu.Item({ "Achievements" }) { openAchievements(it) } },
+            if (keepRunning) QuickMenu.Item({ "Leave SteamOS running" }) { leave() } else null,
+            QuickMenu.Item({ "Exit SteamOS" }) { finishSession(null) },
+            QuickMenu.Item({ "Close menu" }) {},
+        ))
+    }
+
+    /** Store games launch through a 64-bit shortcut id; Steam's own apps have 32-bit ids. */
+    private fun isSteamApp(appId: String) = appId.toLongOrNull()?.let { it in 1..0xFFFFFFFFL } == true
+
+    /** Shows [appId]'s achievements, read afresh each time so ones unlocked this session appear. */
+    private fun openAchievements(appId: String) {
+        val read = ++achievementReads
+        achievements = null
+        achievementsRead = false
+        achievementsOf = appId
+        achievementsView.visibility = View.VISIBLE
+        achievementsView.requestFocus()
+        thread(name = "Achievements") {
+            val list = GameDetailsReader.achievements(applicationContext, appId)
+            main.post {
+                if (read != achievementReads) return@post
+                achievements = list
+                achievementsRead = true
+            }
+        }
+    }
+
+    private fun closeAchievements() {
+        achievementReads++
+        achievementsOf = null
+        achievementsView.visibility = View.GONE
+    }
 
     /** Shows or hides the touch gamepad; the choice is kept for the next session. */
     private fun setOnScreenShown(shown: Boolean) {
@@ -460,6 +524,7 @@ class SessionActivity : ComponentActivity() {
     override fun onNewIntent(intent: android.content.Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
+        setMenuItems()
         if (SessionHost.running) resume(intent.getStringExtra(EXTRA_APP_ID))
     }
 

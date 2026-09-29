@@ -155,8 +155,9 @@ internal object Motion {
 /** True where only one frame is drawn (the screenshot tests): entrance animations start settled. */
 internal val LocalStillFrame = staticCompositionLocalOf { false }
 
+/** [overlay]: drawn over the running session, so with no background of its own. */
 @Composable
-internal fun AppTheme(stillFrame: Boolean = false, content: @Composable () -> Unit) {
+internal fun AppTheme(stillFrame: Boolean = false, overlay: Boolean = false, content: @Composable () -> Unit) {
     val c = AppColors
     val scheme = darkColorScheme(
         primary = c.accent,
@@ -196,7 +197,7 @@ internal fun AppTheme(stillFrame: Boolean = false, content: @Composable () -> Un
     )
     CompositionLocalProvider(LocalStillFrame provides stillFrame) {
         MaterialTheme(colorScheme = scheme) {
-            Surface(Modifier.fillMaxSize(), color = c.background, content = content)
+            Surface(Modifier.fillMaxSize(), color = if (overlay) Color.Transparent else c.background, content = content)
         }
     }
 }
