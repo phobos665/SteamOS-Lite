@@ -131,7 +131,8 @@ internal fun GameDetailsScreen(
             }
             item(key = "facts") {
                 FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    facts(details).forEach { (label, value) -> Fact(label, value) }
+                    val complete = details?.achievements?.allUnlocked() == true
+                    facts(details).forEach { (label, value) -> Fact(label, value, trophy = complete && label == "Achievements") }
                 }
             }
             if (store != null && (store.description.isNotEmpty() || store.genres.isNotEmpty())) {
@@ -157,7 +158,7 @@ internal fun GameDetailsScreen(
                     }
                 }
             }
-            achievementItems(details, game, image)
+            achievementItems(details, game, image, if (compact) AchievementDensity.Compact else AchievementDensity.Regular)
         }
     }
 }
@@ -166,6 +167,7 @@ private fun androidx.compose.foundation.lazy.LazyListScope.achievementItems(
     details: GameDetails?,
     game: InstalledGame,
     image: @Composable (Any?, Int) -> Bitmap?,
+    density: AchievementDensity,
 ) {
     val list = details?.achievements
     item(key = "ach-head") {
@@ -181,22 +183,28 @@ private fun androidx.compose.foundation.lazy.LazyListScope.achievementItems(
                 )
                 else -> {
                     val done = list.count { it.unlocked }
-                    Text("$done of ${list.size} unlocked", color = AppColors.textSecondary)
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Text("$done of ${list.size} unlocked", color = AppColors.textSecondary)
+                        if (list.allUnlocked()) Trophy()
+                    }
                     Spacer(Modifier.height(6.dp))
                     LinearProgressIndicator(progress = { done / list.size.toFloat() }, modifier = Modifier.fillMaxWidth().clip(AppShapes.pill))
                 }
             }
         }
     }
-    list?.let { achievementRows(game.appId, it, image) }
+    list?.let { achievementRows(game.appId, it, image, density) }
 }
 
 @Composable
-private fun Fact(label: String, value: String) {
+private fun Fact(label: String, value: String, trophy: Boolean = false) {
     Card {
         Column(Modifier.padding(horizontal = 14.dp, vertical = 8.dp)) {
             Text(label.uppercase(), color = AppColors.textMuted, fontSize = 11.sp, fontWeight = FontWeight.Medium, letterSpacing = 0.8.sp)
-            Text(value, color = AppColors.text, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text(value, color = AppColors.text, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+                if (trophy) Trophy(16.dp)
+            }
         }
     }
 }

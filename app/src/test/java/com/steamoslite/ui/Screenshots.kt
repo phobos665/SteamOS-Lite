@@ -154,8 +154,13 @@ class Screenshots {
     )
 
     private val achievements = listOf(ach(0, true), ach(1, true), ach(2, false), ach(3, false, hidden = true), ach(4, false))
+    private val allAchievements = (0..4).map { ach(it, true) }
 
-    @Test fun game_details() = paparazzi.snapshot {
+    @Test fun game_details() = gameDetails(achievements)
+
+    @Test fun game_details_complete() = gameDetails(allAchievements)
+
+    private fun gameDetails(list: List<com.steamoslite.util.SteamFiles.Achievement>) = paparazzi.snapshot {
         val game = games[0].first
         AppTheme(stillFrame = true) {
             GameDetailsScreen(
@@ -164,7 +169,7 @@ class Screenshots {
                     game, null,
                     com.steamoslite.util.SteamFiles.Playtime(754, 1_758_900_000),
                     com.steamoslite.util.SteamFiles.AppInfo("Aurora Frontier", "Northlight", "Northlight", 1_700_000_000, 88, 3, "full", 92),
-                    achievements,
+                    list,
                 ),
                 com.steamoslite.games.StoreDetails(
                     "Chart a frozen frontier with your crew, one outpost at a time.", listOf("Adventure", "Exploration"), emptyList(),
@@ -268,15 +273,17 @@ class Screenshots {
         },
     )
 
-    private fun sessionAchievements() = paparazzi.snapshot {
+    private fun sessionAchievements(list: List<com.steamoslite.util.SteamFiles.Achievement> = achievements) = paparazzi.snapshot {
         AppTheme(stillFrame = true) {
             Box(Modifier.fillMaxSize().background(Color(0xFF203040))) {
-                SessionAchievements(games[0].first.appId, "Aurora Frontier", read = true, list = achievements, onClose = {}, image = { _, _ -> null })
+                SessionAchievements(games[0].first.appId, "Aurora Frontier", read = true, list = list, onClose = {}, image = { _, _ -> null })
             }
         }
     }
 
     @Test fun session_achievements() = sessionAchievements()
+
+    @Test fun session_achievements_complete() = sessionAchievements(allAchievements)
 
     @Test fun session_achievements_phone_landscape() {
         paparazzi.unsafeUpdateConfig(
