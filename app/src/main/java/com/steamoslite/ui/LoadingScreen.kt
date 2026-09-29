@@ -99,7 +99,8 @@ internal fun LoadingScreen(state: LoadingState, cover: Bitmap?, backdrop: Bitmap
             .background(AppColors.background)
             .clickable(remember { MutableInteractionSource() }, indication = null, enabled = state.tapToShow, onClick = onTap),
     ) {
-        val compact = maxHeight < 480.dp
+        val height = maxHeight
+        val compact = height < 480.dp
         LoadingBackdrop(backdrop, drift)
         // Darkest at the bottom and on the left, where the text sits.
         Box(
@@ -114,7 +115,7 @@ internal fun LoadingScreen(state: LoadingState, cover: Bitmap?, backdrop: Bitmap
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(if (compact) 24.dp else 44.dp),
         ) {
-            if (cover != null) CoverCard(cover, pulse, Modifier.height(maxHeight * if (compact) 0.55f else 0.5f))
+            if (cover != null) CoverCard(cover, pulse, Modifier.height(height * if (compact) 0.55f else 0.5f))
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(if (compact) 8.dp else 12.dp)) {
                 Text(
                     if (state.title == null) "STARTING" else "LAUNCHING",
