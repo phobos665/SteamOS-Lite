@@ -3,6 +3,7 @@ package com.steamoslite.runtime
 import android.content.Context
 import android.net.Uri
 import com.steamoslite.util.FileUtils
+import com.steamoslite.util.Hashes
 import com.steamoslite.util.ResumableDownload
 import com.steamoslite.util.TarZstd
 import java.io.File
@@ -84,7 +85,7 @@ abstract class ComponentStore(val kind: String) {
                 override fun onRetry(attempt: Int, delayMs: Long, reason: String) {}
             }) { false }
             check(done) { "the download did not finish" }
-            item.sha256?.let { check(sha256(file) == it) { "the download does not match its checksum" } }
+            item.sha256?.let { check(Hashes.sha256(file).equals(it, true)) { "the download does not match its checksum" } }
             return file.inputStream().use { importStream(it, context, item.file) }
         } finally {
             file.delete()
@@ -127,19 +128,6 @@ abstract class ComponentStore(val kind: String) {
         /** A real file of a package, not one of the macOS "._" resource forks some carry. */
         fun isPayload(file: File) = file.isFile && !file.name.startsWith("._") &&
             (file.name.endsWith(".dll", true) || file.name.endsWith(".so"))
-
-        private fun sha256(file: File): String {
-            val digest = java.security.MessageDigest.getInstance("SHA-256")
-            file.inputStream().use { input ->
-                val buffer = ByteArray(1 shl 16)
-                while (true) {
-                    val n = input.read(buffer)
-                    if (n < 0) break
-                    digest.update(buffer, 0, n)
-                }
-            }
-            return digest.digest().joinToString("") { "%02x".format(it) }
-        }
     }
 }
 

@@ -2,10 +2,10 @@ package com.steamoslite.runtime
 
 import android.content.Context
 import com.steamoslite.util.Downloader
+import com.steamoslite.util.Hashes
 import com.steamoslite.util.ResumableDownload
 import org.json.JSONArray
 import java.io.File
-import java.security.MessageDigest
 
 /**
  * Decky Loader, the plugin loader for Steam's Big Picture, from Droid-Deck's ARM64 builds. It talks
@@ -72,7 +72,7 @@ object DeckyLoader {
                 override fun onRetry(attempt: Int, delayMs: Long, reason: String) {}
             }) { false }
             check(done) { "the download did not finish" }
-            check(sha256(temp).equals(release.sha256, true)) { "the download does not match its checksum" }
+            check(Hashes.sha256(temp).equals(release.sha256, true)) { "the download does not match its checksum" }
             check(isAarch64Elf(temp)) { "the download is not an ARM64 Linux program" }
             check(temp.setExecutable(true, false) && temp.renameTo(target)) { "could not install the loader" }
             versionFile(context).writeText(release.tag + "\n")
@@ -93,17 +93,4 @@ object DeckyLoader {
         h[0] == 0x7f.toByte() && h[1] == 'E'.code.toByte() && h[2] == 'L'.code.toByte() && h[3] == 'F'.code.toByte() &&
             h[4] == 2.toByte() && (h[18].toInt() and 255) + ((h[19].toInt() and 255) shl 8) == ELF_AARCH64
     }.getOrDefault(false)
-
-    private fun sha256(file: File): String {
-        val digest = MessageDigest.getInstance("SHA-256")
-        file.inputStream().use { input ->
-            val buffer = ByteArray(1 shl 16)
-            while (true) {
-                val n = input.read(buffer)
-                if (n < 0) break
-                digest.update(buffer, 0, n)
-            }
-        }
-        return digest.digest().joinToString("") { "%02x".format(it) }
-    }
 }

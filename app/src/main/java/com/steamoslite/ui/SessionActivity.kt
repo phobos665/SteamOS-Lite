@@ -32,6 +32,7 @@ import androidx.compose.ui.graphics.toArgb
 import com.steamoslite.games.GameDetailsReader
 import com.steamoslite.input.Controllers
 import com.steamoslite.input.OnScreenController
+import com.steamoslite.runtime.DisplayDrivers
 import com.steamoslite.runtime.Session
 import com.steamoslite.runtime.Settings
 import com.steamoslite.util.FileUtils
@@ -158,7 +159,7 @@ class SessionActivity : ComponentActivity() {
         val runtimeDir = Session.xdgRuntimeDir(this).apply { mkdirs() }
         // The compositor sends this keymap to wl_keyboard clients so they can read our evdev codes.
         assets.open("wayland/keymap.xkb").use { i -> File(runtimeDir, "keymap.xkb").outputStream().use { i.copyTo(it) } }
-        val driver = bundledDriver()
+        val driver = DisplayDrivers.chosen(this) ?: bundledDriver()
         WaylandCompositor.nativeSetOutputRefreshRate(refreshHz().toFloat())
         WaylandCompositor.nativeSetOutputSize(output.width, output.height)
         WaylandCompositor.nativeStartWithSurface(

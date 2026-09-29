@@ -37,6 +37,7 @@ import androidx.compose.ui.unit.sp
 import com.steamoslite.frontend.FrontendExport
 import com.steamoslite.runtime.ComponentStore
 import com.steamoslite.runtime.DeckyLoader
+import com.steamoslite.runtime.DisplayDrivers
 import com.steamoslite.runtime.Dxvk
 import com.steamoslite.runtime.FexCore
 import com.steamoslite.runtime.Nightlies
@@ -44,6 +45,7 @@ import com.steamoslite.runtime.OfflineMode
 import com.steamoslite.runtime.Protons
 import com.steamoslite.runtime.Settings
 import com.steamoslite.runtime.SteamShortcuts
+import com.steamoslite.runtime.TurnipReleases
 import com.steamoslite.runtime.VulkanDrivers
 import com.steamoslite.runtime.Vkd3d
 import kotlinx.coroutines.Dispatchers
@@ -95,7 +97,10 @@ internal data class SettingsState(
     val gpu: VulkanDrivers.Gpu? = null,
     val drivers: List<VulkanDrivers.Installed> = emptyList(),
     val driver: String = VulkanDrivers.RUNTIME,
-    val driverCatalog: List<VulkanDrivers.CatalogDriver> = emptyList(),
+    val driverCatalog: List<TurnipReleases.Asset> = emptyList(),
+    val displayDrivers: List<DisplayDrivers.Installed> = emptyList(),
+    val displayDriver: String = DisplayDrivers.BUNDLED,
+    val displayCatalog: List<TurnipReleases.Asset> = emptyList(),
     /** The driver being downloaded and how far it is. */
     val driverDownload: Pair<String, Float>? = null,
     /** The frontend shortcut folder, or null when exporting is off. */
@@ -131,8 +136,11 @@ internal sealed interface SettingsChange {
     data class KeepRunning(val on: Boolean) : SettingsChange
     data class OnScreen(val on: Boolean) : SettingsChange
     data class Driver(val id: String) : SettingsChange
-    data class DriverInstall(val driver: VulkanDrivers.CatalogDriver) : SettingsChange
+    data class DriverInstall(val driver: TurnipReleases.Asset) : SettingsChange
     data class DriverRemove(val id: String) : SettingsChange
+    data class DisplayDriver(val id: String) : SettingsChange
+    data class DisplayDriverInstall(val driver: TurnipReleases.Asset) : SettingsChange
+    data class DisplayDriverRemove(val id: String) : SettingsChange
     /** Opens the folder picker for frontend shortcuts. */
     data object FrontendPick : SettingsChange
     data class FrontendDir(val path: String?) : SettingsChange
@@ -179,12 +187,15 @@ internal fun SettingsRoute(onBack: () -> Unit) {
                 gpu = VulkanDrivers.gpu(),
                 drivers = VulkanDrivers.installed(context),
                 driver = VulkanDrivers.selected(context),
+                displayDrivers = DisplayDrivers.installed(context),
+                displayDriver = DisplayDrivers.selected(context),
             )
         }
     }
     LaunchedEffect(Unit) {
         reload()
-        state = state.copy(driverCatalog = withContext(Dispatchers.IO) { VulkanDrivers.catalog() })
+        val releases = withContext(Dispatchers.IO) { TurnipReleases.fetch() }
+        state = state.copy(driverCatalog = releases.filter { it.linux }, displayCatalog = releases.filter { !it.linux })
     }
 
     // The component a package is being picked for; the picker's result has no room for it.
@@ -299,6 +310,26 @@ internal fun SettingsRoute(onBack: () -> Unit) {
             }
             return@SettingsScreen
         }
+        if (change is SettingsChange.DisplayDriverInstall) {
+            if (state.driverDownload != null) return@SettingsScreen
+            val driver = change.driver
+            state = state.copy(driverDownload = driver.id to 0f, message = null)
+            scope.launch {
+                val result = withContext(Dispatchers.IO) {
+                    runCatching {
+                        DisplayDrivers.install(context, driver) { f -> scope.launch { if (state.driverDownload?.first == driver.id) state = state.copy(driverDownload = driver.id to f) } }
+                        DisplayDrivers.select(context, driver.id)
+                    }
+                }
+                state = state.copy(
+                    driverDownload = null,
+                    message = result.fold({ "${driver.label} installed and chosen for the display; it applies from the next SteamOS start." },
+                        { "Could not install the driver: ${it.message}" }),
+                )
+                reload()
+            }
+            return@SettingsScreen
+        }
         if (change is SettingsChange.DriverInstall) {
             if (state.driverDownload != null) return@SettingsScreen
             val driver = change.driver
@@ -312,7 +343,7 @@ internal fun SettingsRoute(onBack: () -> Unit) {
                 }
                 state = state.copy(
                     driverDownload = null,
-                    message = result.fold({ "${driverLabel(driver)} installed and chosen." }, { "Could not install the driver: ${it.message}" }),
+                    message = result.fold({ "${driver.label} installed and chosen." }, { "Could not install the driver: ${it.message}" }),
                 )
                 reload()
             }
@@ -349,7 +380,9 @@ internal fun SettingsRoute(onBack: () -> Unit) {
                     is SettingsChange.ShortcutTest -> SteamShortcuts.setTest(context, change.on)
                     is SettingsChange.Driver -> VulkanDrivers.select(context, change.id)
                     is SettingsChange.DriverRemove -> VulkanDrivers.remove(context, change.id)
-                    is SettingsChange.Import, is SettingsChange.DriverInstall, is SettingsChange.LoadNightlies, is SettingsChange.NightlyInstall, SettingsChange.DeckyInstall, SettingsChange.FrontendPick, SettingsChange.FrontendExportNow,
+                    is SettingsChange.DisplayDriver -> DisplayDrivers.select(context, change.id)
+                    is SettingsChange.DisplayDriverRemove -> DisplayDrivers.remove(context, change.id)
+                    is SettingsChange.Import, is SettingsChange.DriverInstall, is SettingsChange.DisplayDriverInstall, is SettingsChange.LoadNightlies, is SettingsChange.NightlyInstall, SettingsChange.DeckyInstall, SettingsChange.FrontendPick, SettingsChange.FrontendExportNow,
                     is SettingsChange.FrontendDir -> {}
                 }
             }
@@ -405,6 +438,7 @@ internal fun SettingsScreen(state: SettingsState, onBack: () -> Unit, onChange: 
 
         item { Section("Graphics") }
         item { DriverChoice(state, onChange) }
+        item { DisplayDriverChoice(state, onChange) }
 
         item { Section("Emulation") }
         item {
@@ -700,7 +734,8 @@ private fun ComponentChoice(store: ComponentStore, pick: ComponentPick, detail: 
 internal fun DriverChoice(state: SettingsState, onChange: (SettingsChange) -> Unit) {
     val family = state.gpu?.family
     val installed = state.drivers.map { it.id }.toSet()
-    val offered = state.driverCatalog.filter { it.id !in installed }.sortedBy { if (it.family == family) 0 else 1 }
+    fun recommended(d: TurnipReleases.Asset) = family != null && family in d.families
+    val offered = state.driverCatalog.filter { it.id !in installed }.sortedBy { if (recommended(it)) 0 else 1 }
     Choice(
         "Vulkan driver",
         (state.gpu?.let { "This device: ${it.name}" + (it.family?.let { f -> " (${f.variant} builds)" } ?: "") + ". " } ?: "") +
@@ -717,7 +752,7 @@ internal fun DriverChoice(state: SettingsState, onChange: (SettingsChange) -> Un
                 SecondaryButton(onClick = { onChange(SettingsChange.DriverInstall(d)) }) {
                     Text(
                         if (progress != null) "Downloading ${(progress * 100).toInt()}%"
-                        else "Download ${driverLabel(d)}" + if (d.family == family) " (recommended)" else "",
+                        else "Download ${d.label}" + if (recommended(d)) " (recommended)" else "",
                     )
                 }
             }
@@ -728,12 +763,35 @@ internal fun DriverChoice(state: SettingsState, onChange: (SettingsChange) -> Un
     ) { onChange(SettingsChange.Driver(it)) }
 }
 
-internal fun driverLabel(d: VulkanDrivers.CatalogDriver) = "Turnip ${d.version.substringBefore('-')} ${d.variant}"
 
 private fun exportMessage(count: Int?, dir: String?) = when {
     count == null -> "Could not write to ${dir ?: "the folder"}. Allow SteamOS Lite storage access, or pick another folder."
     count == 1 -> "1 game exported to $dir."
     else -> "$count games exported to $dir."
+}
+
+/** The Android driver the app's compositor draws the screen with. */
+@Composable
+internal fun DisplayDriverChoice(state: SettingsState, onChange: (SettingsChange) -> Unit) {
+    val installed = state.displayDrivers.map { it.id }.toSet()
+    Choice(
+        "Display driver",
+        "The Android Turnip that puts each frame on the screen, separate from the one games draw with. " +
+            "Change it when the picture stutters or tears; it applies from the next SteamOS start.",
+        listOf(DisplayDrivers.BUNDLED) + state.displayDrivers.map { it.id }, state.displayDriver,
+        label = { id -> if (id == DisplayDrivers.BUNDLED) "Built-in" else state.displayDrivers.first { it.id == id }.name },
+        extra = {
+            for (d in state.displayCatalog.filter { it.id !in installed }) {
+                val progress = state.driverDownload?.takeIf { it.first == d.id }?.second
+                SecondaryButton(onClick = { onChange(SettingsChange.DisplayDriverInstall(d)) }) {
+                    Text(if (progress != null) "Downloading ${(progress * 100).toInt()}%" else "Download ${d.label}")
+                }
+            }
+            for (d in state.displayDrivers) {
+                if (d.id != state.displayDriver) SecondaryButton(onClick = { onChange(SettingsChange.DisplayDriverRemove(d.id)) }) { Text("Remove ${d.name}") }
+            }
+        },
+    ) { onChange(SettingsChange.DisplayDriver(it)) }
 }
 
 /** Decky Loader: install, turn on and off, remove. */
