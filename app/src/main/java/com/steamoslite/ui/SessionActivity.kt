@@ -16,6 +16,7 @@ import android.view.View
 import android.view.WindowManager
 import android.widget.FrameLayout
 import android.widget.TextView
+import androidx.compose.ui.graphics.toArgb
 import com.steamoslite.input.Controllers
 import com.steamoslite.input.OnScreenController
 import com.steamoslite.runtime.Session
@@ -539,8 +540,8 @@ class SessionActivity : Activity() {
 
         /** The loading screen shown over the surface until SteamOS is up. */
         fun loadingView(context: android.content.Context) = TextView(context).apply {
-            setTextColor(Color.WHITE)
-            setBackgroundColor(Color.BLACK)
+            setTextColor(AppColors.textSecondary.toArgb())
+            setBackgroundColor(AppColors.background.toArgb())
             textSize = 18f
             gravity = Gravity.CENTER
             text = "Starting SteamOS…"

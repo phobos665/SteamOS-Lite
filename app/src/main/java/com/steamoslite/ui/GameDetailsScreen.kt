@@ -6,8 +6,6 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
@@ -17,6 +15,7 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -26,11 +25,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.Button
 import androidx.compose.material3.LinearProgressIndicator
-import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -45,7 +40,6 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -104,8 +98,10 @@ internal fun GameDetailsScreen(
     BoxWithConstraints(Modifier.fillMaxSize()) {
         val compact = maxHeight < 480.dp
         val pad = if (compact) 12.dp else 24.dp
+        val hero = details?.hero?.let { image(it, 1280) }
+        Backdrop(hero, Modifier.fillMaxWidth().fillMaxHeight(0.8f), alpha = 0.55f)
         LazyColumn(
-            Modifier.fillMaxSize(),
+            Modifier.fillMaxSize().enterFade(),
             contentPadding = PaddingValues(pad),
             verticalArrangement = Arrangement.spacedBy(if (compact) 10.dp else 16.dp),
         ) {
@@ -113,28 +109,28 @@ internal fun GameDetailsScreen(
                 val play = remember { FocusRequester() }
                 Column {
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                        OutlinedButton(onClick = onBack) { Text("Back") }
-                        Text(game.name, color = Color.White, fontSize = if (compact) 20.sp else 26.sp, fontWeight = FontWeight.Bold,
+                        SecondaryButton(onClick = onBack) { Text("Back") }
+                        Text(game.name, color = AppColors.text, fontSize = if (compact) 20.sp else 26.sp, fontWeight = FontWeight.Bold,
                             maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
                     }
                     Row(
-                        Modifier.padding(top = 10.dp).horizontalScroll(rememberScrollState()),
+                        Modifier.padding(top = 10.dp).focusScrollRow(),
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(10.dp),
                     ) {
-                        Button(onClick = onPlay, modifier = Modifier.focusRequester(play)) { Text("Play", fontSize = 18.sp) }
-                        if (onSettings != null) OutlinedButton(onClick = onSettings) { Text("Game settings") }
-                        if (onPin != null) OutlinedButton(onClick = onPin) { Text("Add to home screen") }
+                        PrimaryButton(onClick = onPlay, modifier = Modifier.focusRequester(play)) {
+                            Text("Play", fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
+                        }
+                        if (onSettings != null) SecondaryButton(onClick = onSettings) { Text("Game settings") }
+                        if (onPin != null) SecondaryButton(onClick = onPin) { Text("Add to home screen") }
                     }
                 }
                 LaunchedEffect(Unit) { runCatching { play.requestFocus() } }
             }
-            details?.hero?.let { hero ->
+            if (hero != null) {
                 item(key = "hero") {
-                    image(hero, 1280)?.let {
-                        Image(it.asImageBitmap(), null, contentScale = ContentScale.Crop,
-                            modifier = Modifier.fillMaxWidth().height(if (compact) 110.dp else 200.dp).clip(RoundedCornerShape(10.dp)))
-                    }
+                    Image(hero.asImageBitmap(), null, contentScale = ContentScale.Crop,
+                        modifier = Modifier.fillMaxWidth().height(if (compact) 110.dp else 200.dp).clip(AppShapes.card))
                 }
             }
             item(key = "facts") {
@@ -145,10 +141,10 @@ internal fun GameDetailsScreen(
             if (store != null && (store.description.isNotEmpty() || store.genres.isNotEmpty())) {
                 item(key = "about") {
                     Column {
-                        if (store.description.isNotEmpty()) Text(store.description, color = Color.LightGray)
+                        if (store.description.isNotEmpty()) Text(store.description, color = AppColors.textSecondary)
                         if (store.genres.isNotEmpty()) {
                             Spacer(Modifier.height(6.dp))
-                            Text(store.genres.joinToString(" · "), color = Color.Gray, fontSize = 13.sp)
+                            Text(store.genres.joinToString(" · "), color = AppColors.textMuted, fontSize = 13.sp)
                         }
                     }
                 }
@@ -157,8 +153,8 @@ internal fun GameDetailsScreen(
                 item(key = "shots") {
                     LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         items(store!!.screenshots) { url ->
-                            Box(Modifier.height(if (compact) 100.dp else 150.dp).aspectRatio(16f / 9f).clip(RoundedCornerShape(8.dp))
-                                .background(Color(0xFF1B2530))) {
+                            Box(Modifier.height(if (compact) 100.dp else 150.dp).aspectRatio(16f / 9f).clip(AppShapes.small)
+                                .background(AppColors.surface)) {
                                 image(url, 600)?.let { Image(it.asImageBitmap(), null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop) }
                             }
                         }
@@ -178,20 +174,20 @@ private fun androidx.compose.foundation.lazy.LazyListScope.achievementItems(
     val list = details?.achievements
     item(key = "ach-head") {
         Column {
-            Text("Achievements", color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
+            Text("Achievements", color = AppColors.text, fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
             Spacer(Modifier.height(6.dp))
             when {
-                details == null -> Text("Reading…", color = Color.Gray)
+                details == null -> Text("Reading…", color = AppColors.textMuted)
                 list == null -> Text(
                     "None to show yet. Steam fetches a game's achievements the first time it runs in SteamOS; " +
                         "they appear here after that session.",
-                    color = Color.Gray,
+                    color = AppColors.textMuted,
                 )
                 else -> {
                     val done = list.count { it.unlocked }
-                    Text("$done of ${list.size} unlocked", color = Color.LightGray)
+                    Text("$done of ${list.size} unlocked", color = AppColors.textSecondary)
                     Spacer(Modifier.height(6.dp))
-                    LinearProgressIndicator(progress = { done / list.size.toFloat() }, modifier = Modifier.fillMaxWidth())
+                    LinearProgressIndicator(progress = { done / list.size.toFloat() }, modifier = Modifier.fillMaxWidth().clip(AppShapes.pill))
                 }
             }
         }
@@ -204,23 +200,23 @@ private fun androidx.compose.foundation.lazy.LazyListScope.achievementItems(
 @Composable
 private fun AchievementRow(appId: String, a: SteamFiles.Achievement, image: @Composable (Any?, Int) -> Bitmap?) {
     val secret = a.hidden && !a.unlocked
-    Surface(color = Color(0xFF1B2530), shape = RoundedCornerShape(10.dp), modifier = Modifier.fillMaxWidth()) {
+    Card(Modifier.fillMaxWidth()) {
         Row(Modifier.padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
             val icon = (if (a.unlocked) a.icon else a.iconGray ?: a.icon)?.let { SteamFiles.iconUrl(appId, it) }
-            Box(Modifier.size(48.dp).clip(RoundedCornerShape(6.dp)).background(Color(0xFF0E141B))) {
+            Box(Modifier.size(48.dp).clip(AppShapes.small).background(AppColors.background)) {
                 image(icon, 128)?.let {
                     Image(it.asImageBitmap(), null, Modifier.fillMaxSize().alpha(if (a.unlocked) 1f else 0.6f))
                 }
             }
             Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {
-                Text(if (secret) "Hidden achievement" else a.name, color = if (a.unlocked) Color.White else Color.LightGray, fontSize = 15.sp)
+                Text(if (secret) "Hidden achievement" else a.name, color = if (a.unlocked) AppColors.text else AppColors.textSecondary, fontSize = 15.sp)
                 val desc = if (secret) "Details are shown once it is unlocked." else a.description
-                if (desc.isNotEmpty()) Text(desc, color = Color.Gray, fontSize = 13.sp)
+                if (desc.isNotEmpty()) Text(desc, color = AppColors.textMuted, fontSize = 13.sp)
             }
             if (a.unlocked && a.unlockedAt > 0) {
                 Spacer(Modifier.width(12.dp))
-                Text(dateOf(a.unlockedAt), color = Color(0xFF8FD3FF), fontSize = 13.sp)
+                Text(dateOf(a.unlockedAt), color = AppColors.accent, fontSize = 13.sp, fontWeight = FontWeight.Medium)
             }
         }
     }
@@ -228,10 +224,10 @@ private fun AchievementRow(appId: String, a: SteamFiles.Achievement, image: @Com
 
 @Composable
 private fun Fact(label: String, value: String) {
-    Surface(color = Color(0xFF1B2530), shape = RoundedCornerShape(8.dp)) {
-        Column(Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
-            Text(label, color = Color.Gray, fontSize = 12.sp)
-            Text(value, color = Color.White, fontSize = 15.sp)
+    Card {
+        Column(Modifier.padding(horizontal = 14.dp, vertical = 8.dp)) {
+            Text(label.uppercase(), color = AppColors.textMuted, fontSize = 11.sp, fontWeight = FontWeight.Medium, letterSpacing = 0.8.sp)
+            Text(value, color = AppColors.text, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
         }
     }
 }

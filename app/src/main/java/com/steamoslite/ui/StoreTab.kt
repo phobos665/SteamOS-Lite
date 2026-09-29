@@ -2,7 +2,6 @@ package com.steamoslite.ui
 
 import android.graphics.Bitmap
 import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -12,9 +11,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyGridScope
 import androidx.compose.foundation.lazy.grid.items
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.material3.Button
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -28,8 +24,8 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.steamoslite.stores.Store
@@ -138,13 +134,9 @@ internal fun rememberStoreTab(
 }
 
 @Composable
-internal fun LibraryTabs(selected: Store?, gap: androidx.compose.ui.unit.Dp, onSelect: (Store?) -> Unit) {
-    Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(gap)) {
-        (listOf<Store?>(null) + Store.entries).forEach { s ->
-            val label = s?.label ?: "Steam"
-            if (s == selected) Button(onClick = { onSelect(s) }) { Text(label) }
-            else OutlinedButton(onClick = { onSelect(s) }) { Text(label) }
-        }
+internal fun LibraryTabs(selected: Store?, gap: androidx.compose.ui.unit.Dp, onSelect: (Store?) -> Unit, compact: Boolean = false) {
+    Row(Modifier.focusScrollRow().padding(vertical = if (compact) 0.dp else gap / 4)) {
+        PillTabs(listOf<Store?>(null) + Store.entries, selected, label = { it?.label ?: "Steam" }, onSelect = onSelect, compact = compact)
     }
 }
 
@@ -153,10 +145,12 @@ internal fun LazyGridScope.storeTabItems(
     actions: StoreTabActions,
     layout: HomeLayout,
     coverOf: @Composable (StoreGame) -> Bitmap?,
+    /** A game's cover when its tile takes focus, for the library's backdrop. */
+    onFocusArt: (Bitmap?) -> Unit = {},
 ) {
     val full: androidx.compose.foundation.lazy.grid.LazyGridItemSpanScope.() -> GridItemSpan = { GridItemSpan(maxLineSpan) }
     if (state == null) {
-        item(key = "store-loading", span = full) { Text("Loading…", color = Color.Gray) }
+        item(key = "store-loading", span = full) { Text("Loading…", color = AppColors.textMuted) }
         return
     }
     val label = state.store.label
@@ -166,12 +160,12 @@ internal fun LazyGridScope.storeTabItems(
                 Text(
                     "Sign in to $label to see your library here. Games you install from it are added to Steam as " +
                         "non-Steam games and run with Proton.",
-                    color = Color.LightGray,
+                    color = AppColors.textSecondary,
                 )
                 Spacer(Modifier.height(12.dp))
-                if (state.busy != null) Text(state.busy, color = Color.Gray)
-                else Button(onClick = { actions.onSignIn(state.store) }) { Text("Sign in to $label", fontSize = layout.buttonText) }
-                state.error?.let { Text(it, color = Color(0xFFFF8080), modifier = Modifier.padding(top = 8.dp)) }
+                if (state.busy != null) Text(state.busy, color = AppColors.textMuted)
+                else PrimaryButton(onClick = { actions.onSignIn(state.store) }) { Text("Sign in to $label", fontSize = layout.buttonText) }
+                state.error?.let { Text(it, color = AppColors.error, modifier = Modifier.padding(top = 8.dp)) }
             }
         }
         return
@@ -181,16 +175,16 @@ internal fun LazyGridScope.storeTabItems(
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(layout.gap)) {
                 Text(
                     state.busy ?: "$label library (${state.games.size})",
-                    color = Color.LightGray, fontSize = 16.sp, modifier = Modifier.weight(1f),
+                    color = AppColors.textSecondary, fontSize = 16.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f),
                 )
-                OutlinedButton(onClick = { actions.onRefresh(state.store) }, enabled = state.busy == null) { Text("Refresh") }
-                OutlinedButton(onClick = { actions.onSignOut(state.store) }, enabled = state.busy == null) { Text("Sign out") }
+                SecondaryButton(onClick = { actions.onRefresh(state.store) }, enabled = state.busy == null) { Text("Refresh") }
+                SecondaryButton(onClick = { actions.onSignOut(state.store) }, enabled = state.busy == null) { Text("Sign out") }
             }
-            state.error?.let { Text(it, color = Color(0xFFFF8080)) }
+            state.error?.let { Text(it, color = AppColors.error) }
         }
     }
     if (state.games.isEmpty() && state.busy == null) {
-        item(key = "store-empty", span = full) { Text("No games found in your $label library.", color = Color.Gray) }
+        item(key = "store-empty", span = full) { Text("No games found in your $label library.", color = AppColors.textMuted) }
     }
     items(state.games, key = { "${it.store.id}:${it.id}" }) { game ->
         val installed = game.id in state.installed
@@ -201,9 +195,11 @@ internal fun LazyGridScope.storeTabItems(
             download.error != null -> "Failed"
             else -> "${(download.fraction * 100).toInt()}%"
         }
+        val cover = coverOf(game)
         Tile(
-            game.title, coverOf(game), badge,
+            game.title, cover, badge,
             onMenu = { actions.onOpen(game) },
+            onFocused = { onFocusArt(cover) },
             onClick = { actions.onOpen(game) },
         )
     }

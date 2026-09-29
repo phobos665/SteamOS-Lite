@@ -1,7 +1,7 @@
 package com.steamoslite.ui
 
 import android.content.Context
-import android.graphics.Color
+import android.content.res.ColorStateList
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.graphics.drawable.StateListDrawable
@@ -12,6 +12,7 @@ import android.view.View
 import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.TextView
+import androidx.compose.ui.graphics.toArgb
 
 /**
  * The in-session quick menu the back button opens: a panel over SteamOS with a few actions, driven
@@ -24,8 +25,9 @@ class QuickMenu(context: Context) : FrameLayout(context) {
         orientation = LinearLayout.VERTICAL
         setPadding(dp(20), dp(24), dp(20), dp(24))
         background = GradientDrawable().apply {
-            setColor(0xF01B2530.toInt())
-            cornerRadius = dp(12).toFloat()
+            setColor(AppColors.surface.copy(alpha = 0.94f).toArgb())
+            cornerRadius = dp(16).toFloat()
+            setStroke(dp(1), AppColors.outline.toArgb())
         }
     }
     private var items: List<Item> = emptyList()
@@ -50,14 +52,14 @@ class QuickMenu(context: Context) : FrameLayout(context) {
         rows.clear()
         panel.addView(TextView(context).apply {
             text = title
-            setTextColor(Color.WHITE)
+            setTextColor(AppColors.text.toArgb())
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 22f)
             typeface = Typeface.DEFAULT_BOLD
             setPadding(dp(8), 0, dp(8), dp(16))
         })
         for (item in items) {
             val row = TextView(context).apply {
-                setTextColor(Color.WHITE)
+                setTextColor(rowText())
                 setTextSize(TypedValue.COMPLEX_UNIT_SP, 18f)
                 setPadding(dp(16), dp(14), dp(16), dp(14))
                 isFocusable = true
@@ -103,12 +105,17 @@ class QuickMenu(context: Context) : FrameLayout(context) {
     }
 
     private fun rowBackground() = StateListDrawable().apply {
-        val focused = GradientDrawable().apply { setColor(0xFF1A9FFF.toInt()); cornerRadius = dp(8).toFloat() }
-        val idle = GradientDrawable().apply { setColor(0x22FFFFFF); cornerRadius = dp(8).toFloat() }
+        val focused = GradientDrawable().apply { setColor(AppColors.accent.toArgb()); cornerRadius = dp(24).toFloat() }
+        val idle = GradientDrawable().apply { setColor(AppColors.surfaceHigh.toArgb()); cornerRadius = dp(24).toFloat() }
         addState(intArrayOf(android.R.attr.state_focused), focused)
         addState(intArrayOf(android.R.attr.state_pressed), focused)
         addState(intArrayOf(), idle)
     }
+
+    private fun rowText() = ColorStateList(
+        arrayOf(intArrayOf(android.R.attr.state_focused), intArrayOf(android.R.attr.state_pressed), intArrayOf()),
+        intArrayOf(AppColors.onAccent.toArgb(), AppColors.onAccent.toArgb(), AppColors.text.toArgb()),
+    )
 
     private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
 }
