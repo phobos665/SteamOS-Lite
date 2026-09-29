@@ -133,7 +133,7 @@ internal fun LoadingScreen(state: LoadingState, cover: Bitmap?, backdrop: Bitmap
                     StageBar(state.stage, state.stages, pulse, sweep, Modifier.fillMaxWidth(if (compact) 0.9f else 0.75f))
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                         Spinner(spin, Modifier.size(18.dp))
-                        Text(state.step.ifEmpty { "Starting…" }, color = AppColors.textSecondary, fontSize = 16.sp, maxLines = 2)
+                        Text(state.step.ifEmpty { "Starting…" }.replaceFirstChar { it.uppercase() }, color = AppColors.textSecondary, fontSize = 16.sp, maxLines = 2)
                     }
                     if (state.detail.isNotEmpty()) {
                         Text(state.detail, color = AppColors.textMuted, fontSize = 13.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
