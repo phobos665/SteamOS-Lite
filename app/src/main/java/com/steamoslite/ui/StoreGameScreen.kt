@@ -3,20 +3,16 @@ package com.steamoslite.ui
 import android.graphics.Bitmap
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.Image
-import androidx.compose.foundation.horizontalScroll
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.Button
 import androidx.compose.material3.LinearProgressIndicator
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -31,7 +27,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -94,54 +89,56 @@ internal fun StoreGameScreen(
     BoxWithConstraints(Modifier.fillMaxSize()) {
         val compact = maxHeight < 480.dp
         val pad = if (compact) 12.dp else 24.dp
-        LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(pad), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        val hero = game.heroUrl.ifEmpty { null }?.let { image(it, 1280) }
+        Backdrop(hero, Modifier.fillMaxWidth().fillMaxHeight(0.8f), alpha = 0.55f)
+        LazyColumn(Modifier.fillMaxSize().enterFade(), contentPadding = PaddingValues(pad), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             item {
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    OutlinedButton(onClick = onBack) { Text("Back") }
-                    Text(game.title, color = Color.White, fontSize = if (compact) 20.sp else 26.sp, fontWeight = FontWeight.Bold,
+                    SecondaryButton(onClick = onBack) { Text("Back") }
+                    Text(game.title, color = AppColors.text, fontSize = if (compact) 20.sp else 26.sp, fontWeight = FontWeight.Bold,
                         maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
                 }
             }
             item {
                 val primary = remember { FocusRequester() }
                 Row(
-                    Modifier.horizontalScroll(rememberScrollState()),
+                    Modifier.focusScrollRow(),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
                     when {
-                        running -> OutlinedButton(onClick = onCancel, modifier = Modifier.focusRequester(primary)) { Text("Cancel download") }
+                        running -> SecondaryButton(onClick = onCancel, modifier = Modifier.focusRequester(primary)) { Text("Cancel download") }
                         installation != null -> {
-                            Button(onClick = onPlay, modifier = Modifier.focusRequester(primary)) { Text("Play", fontSize = 18.sp) }
-                            if (onSettings != null) OutlinedButton(onClick = onSettings) { Text("Game settings") }
-                            OutlinedButton(onClick = onInstall) { Text("Update") }
-                            OutlinedButton(onClick = { if (confirmUninstall) onUninstall() else confirmUninstall = true }) {
+                            PrimaryButton(onClick = onPlay, modifier = Modifier.focusRequester(primary)) {
+                                Text("Play", fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
+                            }
+                            if (onSettings != null) SecondaryButton(onClick = onSettings) { Text("Game settings") }
+                            SecondaryButton(onClick = onInstall) { Text("Update") }
+                            SecondaryButton(onClick = { if (confirmUninstall) onUninstall() else confirmUninstall = true }) {
                                 Text(if (confirmUninstall) "Confirm uninstall" else "Uninstall")
                             }
                         }
-                        else -> Button(onClick = onInstall, modifier = Modifier.focusRequester(primary)) {
+                        else -> PrimaryButton(onClick = onInstall, modifier = Modifier.focusRequester(primary)) {
                             Text(if (download?.error != null) "Retry" else "Install" + sizeLabel(game.downloadSize), fontSize = 18.sp)
                         }
                     }
                 }
                 LaunchedEffect(installation != null, running) { runCatching { primary.requestFocus() } }
             }
-            if (game.heroUrl.isNotEmpty()) {
+            if (hero != null) {
                 item {
-                    image(game.heroUrl, 1280)?.let {
-                        Image(it.asImageBitmap(), null, contentScale = ContentScale.Crop,
-                            modifier = Modifier.fillMaxWidth().height(if (compact) 110.dp else 200.dp).clip(RoundedCornerShape(10.dp)))
-                    }
+                    Image(hero.asImageBitmap(), null, contentScale = ContentScale.Crop,
+                        modifier = Modifier.fillMaxWidth().height(if (compact) 110.dp else 200.dp).clip(AppShapes.card))
                 }
             }
             if (download != null && (installation == null || running || download.error != null)) {
                 item {
                     if (download.error != null) {
-                        Text("Download failed: ${download.error}", color = Color(0xFFFF8080))
+                        Text("Download failed: ${download.error}", color = AppColors.error)
                     } else {
-                        Text("${download.stage} · ${(download.fraction * 100).toInt()}%", color = Color.White)
-                        LinearProgressIndicator(progress = { download.fraction }, modifier = Modifier.fillMaxWidth())
-                        Text("It carries on in the background.", color = Color.Gray, fontSize = 13.sp)
+                        Text("${download.stage} · ${(download.fraction * 100).toInt()}%", color = AppColors.text)
+                        LinearProgressIndicator(progress = { download.fraction }, modifier = Modifier.fillMaxWidth().clip(AppShapes.pill))
+                        Text("It carries on in the background.", color = AppColors.textMuted, fontSize = 13.sp)
                     }
                 }
             }
@@ -150,7 +147,7 @@ internal fun StoreGameScreen(
                     Text(
                         "Installed" + sizeLabel(installation.sizeBytes) + ". It is in the Steam library as a " +
                             "non-Steam game from the next time SteamOS starts; Play starts it straight away.",
-                        color = Color(0xFF8FD3FF),
+                        color = AppColors.info,
                     )
                 }
             }
@@ -159,21 +156,21 @@ internal fun StoreGameScreen(
                 item {
                     Text(
                         (if (installation != null) "DLC installed: " else "Owned DLC, installed with the game: ") + dlc.joinToString(", "),
-                        color = Color.LightGray,
+                        color = AppColors.textSecondary,
                     )
                 }
             }
             if (installation != null) {
                 item {
                     Text("Update fetches the latest build and any DLC bought since, keeping files that are already right.",
-                        color = Color.Gray, fontSize = 13.sp)
+                        color = AppColors.textMuted, fontSize = 13.sp)
                 }
             }
             if (game.thirdPartyManagedApp.isNotEmpty()) {
                 item {
                     Text(
                         "This game needs ${game.thirdPartyManagedApp}, which does not run here, so it may not start.",
-                        color = Color(0xFFFFC080),
+                        color = AppColors.warning,
                     )
                 }
             }
@@ -182,9 +179,9 @@ internal fun StoreGameScreen(
                 game.publisher.takeIf { it.isNotEmpty() && it != game.developer }?.let { "Publisher: $it" },
                 game.releaseDate.takeIf { it.isNotEmpty() }?.let { "Released: ${it.take(10)}" },
             )
-            if (facts.isNotEmpty()) item { Text(facts.joinToString("   ·   "), color = Color.LightGray, fontSize = 14.sp) }
+            if (facts.isNotEmpty()) item { Text(facts.joinToString("   ·   "), color = AppColors.textSecondary, fontSize = 14.sp) }
             if (game.description.isNotEmpty()) {
-                item { Text(stripHtml(game.description), color = Color.LightGray) }
+                item { Text(stripHtml(game.description), color = AppColors.textSecondary) }
             }
         }
     }

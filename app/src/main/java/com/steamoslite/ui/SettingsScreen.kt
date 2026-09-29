@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -16,10 +17,6 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.Button
-import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -31,7 +28,6 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -221,16 +217,16 @@ internal fun SettingsRoute(onBack: () -> Unit) {
 /** The screen as drawn (the screenshot tests draw it too). */
 @Composable
 internal fun SettingsScreen(state: SettingsState, onBack: () -> Unit, onChange: (SettingsChange) -> Unit) {
-    LazyColumn(Modifier.fillMaxSize().padding(24.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+    LazyColumn(Modifier.fillMaxSize().enterFade(), contentPadding = PaddingValues(24.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         item {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                OutlinedButton(onClick = onBack) { Text("Back") }
+                SecondaryButton(onClick = onBack) { Text("Back") }
                 Spacer(Modifier.width(16.dp))
-                Text("Settings", fontSize = 26.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                Text("Settings", fontSize = 26.sp, fontWeight = FontWeight.Bold, color = AppColors.text)
             }
         }
-        item { Text("Changes apply the next time SteamOS starts.", color = Color.LightGray) }
-        state.message?.let { item { Text(it, color = Color(0xFF8FD3FF)) } }
+        item { Text("Changes apply the next time SteamOS starts.", color = AppColors.textSecondary) }
+        state.message?.let { item { Text(it, color = AppColors.info) } }
 
         item { Section("Display") }
         item {
@@ -334,14 +330,14 @@ internal fun SettingsScreen(state: SettingsState, onBack: () -> Unit, onChange: 
             ) {
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     if (dir == null) {
-                        Button(onClick = { onChange(SettingsChange.FrontendDir(FrontendExport.suggestedDir().path)) }) {
+                        PrimaryButton(onClick = { onChange(SettingsChange.FrontendDir(FrontendExport.suggestedDir().path)) }) {
                             Text("Export to ROMs/steamos")
                         }
-                        OutlinedButton(onClick = { onChange(SettingsChange.FrontendPick) }) { Text("Choose folder…") }
+                        SecondaryButton(onClick = { onChange(SettingsChange.FrontendPick) }) { Text("Choose folder…") }
                     } else {
-                        Button(onClick = { onChange(SettingsChange.FrontendExportNow) }) { Text("Export now") }
-                        OutlinedButton(onClick = { onChange(SettingsChange.FrontendPick) }) { Text("Change folder…") }
-                        OutlinedButton(onClick = { onChange(SettingsChange.FrontendDir(null)) }) { Text("Stop exporting") }
+                        PrimaryButton(onClick = { onChange(SettingsChange.FrontendExportNow) }) { Text("Export now") }
+                        SecondaryButton(onClick = { onChange(SettingsChange.FrontendPick) }) { Text("Change folder…") }
+                        SecondaryButton(onClick = { onChange(SettingsChange.FrontendDir(null)) }) { Text("Stop exporting") }
                     }
                 }
             }
@@ -377,13 +373,11 @@ internal fun componentLabel(store: ComponentStore, version: String) =
 /** A card with a title, what it does, and whatever controls it. */
 @Composable
 internal fun SettingCard(title: String, detail: String, content: @Composable () -> Unit) {
-    Surface(color = Color(0xFF1B2530), shape = RoundedCornerShape(10.dp), modifier = Modifier.fillMaxWidth()) {
-        Column(Modifier.padding(16.dp)) {
-            Text(title, color = Color.White, fontSize = 16.sp)
-            if (detail.isNotEmpty()) Text(detail, color = Color.Gray, fontSize = 13.sp)
-            Spacer(Modifier.height(10.dp))
-            content()
-        }
+    CardColumn {
+        Text(title, color = AppColors.text, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+        if (detail.isNotEmpty()) Text(detail, color = AppColors.textMuted, fontSize = 13.sp)
+        Spacer(Modifier.height(10.dp))
+        content()
     }
 }
 
@@ -401,8 +395,8 @@ internal fun <T> Choice(
 ) = SettingCard(title, detail) {
     FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         for (option in options) {
-            if (option == selected) Button(onClick = {}) { Text(label(option)) }
-            else OutlinedButton(onClick = { onSelect(option) }) { Text(label(option)) }
+            if (option == selected) PrimaryButton(onClick = {}) { Text(label(option)) }
+            else SecondaryButton(onClick = { onSelect(option) }) { Text(label(option)) }
         }
         extra()
     }
@@ -410,11 +404,11 @@ internal fun <T> Choice(
 
 @Composable
 private fun Toggle(title: String, detail: String, on: Boolean, onChange: (Boolean) -> Unit) {
-    Surface(color = Color(0xFF1B2530), shape = RoundedCornerShape(10.dp), modifier = Modifier.fillMaxWidth()) {
+    Card(Modifier.fillMaxWidth()) {
         Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
-                Text(title, color = Color.White, fontSize = 16.sp)
-                Text(detail, color = Color.Gray, fontSize = 13.sp)
+                Text(title, color = AppColors.text, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+                Text(detail, color = AppColors.textMuted, fontSize = 13.sp)
             }
             Spacer(Modifier.width(12.dp))
             Switch(checked = on, onCheckedChange = onChange)
@@ -431,10 +425,10 @@ private fun ComponentChoice(store: ComponentStore, pick: ComponentPick, detail: 
         listOf(ComponentStore.PROTONS_OWN) + pick.versions.reversed(), pick.selected,
         label = { if (it == ComponentStore.PROTONS_OWN) "Proton's own" else it + if (it in pick.imported) " (imported)" else "" },
         extra = {
-            OutlinedButton(onClick = { onChange(SettingsChange.Import(store)) }) { Text("Import…") }
+            SecondaryButton(onClick = { onChange(SettingsChange.Import(store)) }) { Text("Import…") }
             for (version in pick.imported) {
                 if (version != pick.selected) {
-                    OutlinedButton(onClick = { onChange(SettingsChange.Remove(store, version)) }) { Text("Remove $version") }
+                    SecondaryButton(onClick = { onChange(SettingsChange.Remove(store, version)) }) { Text("Remove $version") }
                 }
             }
         },
