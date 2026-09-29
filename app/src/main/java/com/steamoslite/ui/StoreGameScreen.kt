@@ -3,6 +3,8 @@ package com.steamoslite.ui
 import android.graphics.Bitmap
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.PaddingValues
@@ -49,7 +51,7 @@ import kotlinx.coroutines.withContext
 
 /** A GOG or Epic game's page with its data and actions. */
 @Composable
-internal fun StoreGameRoute(game: StoreGame, onBack: () -> Unit, onPlay: () -> Unit) {
+internal fun StoreGameRoute(game: StoreGame, onBack: () -> Unit, onPlay: () -> Unit, onSettings: (() -> Unit)? = null) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     BackHandler(onBack = onBack)
@@ -61,6 +63,7 @@ internal fun StoreGameRoute(game: StoreGame, onBack: () -> Unit, onPlay: () -> U
     }
     StoreGameScreen(
         game, installation, download, onBack, onPlay,
+        onSettings = onSettings,
         onInstall = { StoreDownloadService.enqueue(context, game) },
         onCancel = { StoreDownloadService.cancel(context, game.store, game.id) },
         onUninstall = {
@@ -83,6 +86,7 @@ internal fun StoreGameScreen(
     onInstall: () -> Unit,
     onCancel: () -> Unit,
     onUninstall: () -> Unit,
+    onSettings: (() -> Unit)? = null,
     image: @Composable (source: Any?, maxPx: Int) -> Bitmap? = { source, maxPx -> rememberImage(source, maxPx) },
 ) {
     var confirmUninstall by remember(game.id) { mutableStateOf(false) }
@@ -92,15 +96,24 @@ internal fun StoreGameScreen(
         val pad = if (compact) 12.dp else 24.dp
         LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(pad), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             item {
-                val primary = remember { FocusRequester() }
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     OutlinedButton(onClick = onBack) { Text("Back") }
                     Text(game.title, color = Color.White, fontSize = if (compact) 20.sp else 26.sp, fontWeight = FontWeight.Bold,
                         maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                }
+            }
+            item {
+                val primary = remember { FocusRequester() }
+                Row(
+                    Modifier.horizontalScroll(rememberScrollState()),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
                     when {
                         running -> OutlinedButton(onClick = onCancel, modifier = Modifier.focusRequester(primary)) { Text("Cancel download") }
                         installation != null -> {
                             Button(onClick = onPlay, modifier = Modifier.focusRequester(primary)) { Text("Play", fontSize = 18.sp) }
+                            if (onSettings != null) OutlinedButton(onClick = onSettings) { Text("Game settings") }
                             OutlinedButton(onClick = onInstall) { Text("Update") }
                             OutlinedButton(onClick = { if (confirmUninstall) onUninstall() else confirmUninstall = true }) {
                                 Text(if (confirmUninstall) "Confirm uninstall" else "Uninstall")

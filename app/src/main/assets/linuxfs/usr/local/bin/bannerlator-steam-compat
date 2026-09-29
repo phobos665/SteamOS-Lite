@@ -89,6 +89,23 @@ bl_game_cpus() {
 }
 """
 
+# A game's own settings from the app's game settings screen, over the session-wide ones: a file of
+# KEY=value lines per app id (a Steam app id, or the id of one of the app's non-Steam shortcuts).
+# Read, not sourced, and only the keys the launch path acts on are taken.
+BL_GAME_SETTINGS_SETUP = """
+bl_game_settings() {
+  id=${STEAM_COMPAT_APP_ID:-${SteamAppId:-}}
+  f="$HOME/.bl-games/$id.env"
+  [ -n "$id" ] && [ -f "$f" ] || return 0
+  while IFS='=' read -r k v || [ -n "$k" ]; do
+    case $k in
+      BL_FEXCORE|BL_DXVK|FEX_[A-Z0-9_]*) export "$k=$v" ;;
+    esac
+  done < "$f"
+  echo "bannerlator-proton: game settings for app $id applied" >&2
+}
+"""
+
 BL_DIRECTAUDIO_SETUP = """
 bl_directaudio() {
   base=$1
@@ -273,6 +290,7 @@ fi
 for name in %s; do
   depot="$steam_root/steamapps/common/$name"
   if [ -d "$depot/files/bin-arm64" ] && [ -x "$depot/proton" ]; then
+    bl_game_settings
     bl_directaudio "$depot"
     bl_game_cpus
     bl_fexcore
@@ -287,7 +305,7 @@ exit 1
 # and a % format would eat that into a single %, leaving a shell expansion that silently does
 # something else.
 LAUNCHER_SH = LAUNCHER_SH.replace(
-    "verb=$1; shift", "verb=$1; shift\n" + BL_DIRECTAUDIO_SETUP + BL_GAME_CPUS_SETUP + BL_FEXCORE_SETUP + BL_DXVK_SETUP, 1)
+    "verb=$1; shift", "verb=$1; shift\n" + BL_GAME_SETTINGS_SETUP + BL_DIRECTAUDIO_SETUP + BL_GAME_CPUS_SETUP + BL_FEXCORE_SETUP + BL_DXVK_SETUP, 1)
 
 # A third-party Proton dropped into compatibilitytools.d - GE-Proton, proton-cachyos, anything of
 # that shape - is adopted rather than used as shipped, for the same two reasons Valve's ARM64 depot
@@ -319,6 +337,7 @@ if [ -f "$fake" ]; then
     *) LD_PRELOAD="$fake${LD_PRELOAD:+:$LD_PRELOAD}"; export LD_PRELOAD ;;
   esac
 fi
+bl_game_settings
 bl_directaudio "$here"
 bl_game_cpus
 bl_fexcore
@@ -485,7 +504,7 @@ def adopt_extras(tools):
             # ${major%%.*} of its own, and putting it through the format would eat both.
             body = (EXTRA_WRAPPER_SH % entry_point).replace(
                     'here=$(dirname "$0")',
-                    'here=$(dirname "$0")\n' + BL_DIRECTAUDIO_SETUP + BL_GAME_CPUS_SETUP + BL_FEXCORE_SETUP + BL_DXVK_SETUP, 1)
+                    'here=$(dirname "$0")\n' + BL_GAME_SETTINGS_SETUP + BL_DIRECTAUDIO_SETUP + BL_GAME_CPUS_SETUP + BL_FEXCORE_SETUP + BL_DXVK_SETUP, 1)
             with open(wrapper, "w", encoding="utf-8") as f:
                 f.write(body)
             os.chmod(wrapper, 0o755)

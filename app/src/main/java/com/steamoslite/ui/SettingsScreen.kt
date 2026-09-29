@@ -54,7 +54,7 @@ internal data class ComponentPick(
     val selected: String = ComponentStore.PROTONS_OWN,
 )
 
-private fun ComponentStore.pick(context: android.content.Context) =
+internal fun ComponentStore.pick(context: android.content.Context) =
     ComponentPick(available(context), imported(context), selected(context))
 
 /** Everything the settings screen shows. */
@@ -376,7 +376,7 @@ internal fun componentLabel(store: ComponentStore, version: String) =
 
 /** A card with a title, what it does, and whatever controls it. */
 @Composable
-private fun SettingCard(title: String, detail: String, content: @Composable () -> Unit) {
+internal fun SettingCard(title: String, detail: String, content: @Composable () -> Unit) {
     Surface(color = Color(0xFF1B2530), shape = RoundedCornerShape(10.dp), modifier = Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp)) {
             Text(title, color = Color.White, fontSize = 16.sp)
@@ -390,7 +390,7 @@ private fun SettingCard(title: String, detail: String, content: @Composable () -
 /** One of several options, all shown: the chosen one filled, the rest outlined. */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun <T> Choice(
+internal fun <T> Choice(
     title: String,
     detail: String,
     options: List<T>,
