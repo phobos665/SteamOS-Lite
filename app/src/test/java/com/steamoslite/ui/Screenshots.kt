@@ -7,7 +7,9 @@ import android.graphics.Paint
 import android.graphics.Shader
 import android.graphics.Typeface
 import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.ui.Modifier
@@ -156,6 +158,17 @@ class Screenshots {
                         } + com.steamoslite.runtime.VulkanDrivers.CatalogDriver("Turnip-26.4.0-devel-1111111111-a7xx-Linux", "26.4.0-devel-1111111111", "a7xx", "", 0),
                     ),
                 ) {}
+    @Test fun settings_direct3d12() = paparazzi.snapshot {
+        AppTheme(stillFrame = true) {
+            Column(
+                Modifier.fillMaxSize().background(AppColors.background).padding(24.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                Choice(
+                    "VKD3D-Proton version", "Direct3D 12 on Vulkan.",
+                    listOf("", "2.8", "2.13", "2.14.1", "3.0b"), "2.14.1", label = { it.ifEmpty { "Proton's own" } },
+                ) {}
+                Vkd3dChoices("12_1", "6_0", "", global = null, onLevel = {}, onModel = {}, onConfig = {})
             }
         }
     }
