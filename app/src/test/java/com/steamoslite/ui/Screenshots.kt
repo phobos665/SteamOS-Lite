@@ -158,6 +158,10 @@ class Screenshots {
                         } + com.steamoslite.runtime.VulkanDrivers.CatalogDriver("Turnip-26.4.0-devel-1111111111-a7xx-Linux", "26.4.0-devel-1111111111", "a7xx", "", 0),
                     ),
                 ) {}
+            }
+        }
+    }
+
     @Test fun settings_direct3d12() = paparazzi.snapshot {
         AppTheme(stillFrame = true) {
             Column(
