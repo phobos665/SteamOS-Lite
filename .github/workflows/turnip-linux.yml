@@ -17,9 +17,12 @@ on:
       mesa_repo:
         description: Mesa repository
         default: https://gitlab.freedesktop.org/mesa/mesa.git
+      gen8_ref:
+        description: Branch, tag or commit of the gen8 fork, for a8xx
+        default: gen8
       variants:
-        description: Comma-separated variants (a7xx, a6xx)
-        default: a7xx,a6xx
+        description: Comma-separated variants (a7xx, a8xx, a6xx)
+        default: a7xx,a8xx,a6xx
       release:
         description: Publish the zips as a release
         type: boolean
@@ -35,7 +38,7 @@ jobs:
       variants: ${{ steps.v.outputs.variants }}
     steps:
       - id: v
-        run: echo "variants=$(jq -cn --arg v '${{ inputs.variants || 'a7xx,a6xx' }}' '$v | split(",") | map(gsub(" "; "")) | map(select(. != ""))')" >> "$GITHUB_OUTPUT"
+        run: echo "variants=$(jq -cn --arg v '${{ inputs.variants || 'a7xx,a8xx,a6xx' }}' '$v | split(",") | map(gsub(" "; "")) | map(select(. != ""))')" >> "$GITHUB_OUTPUT"
 
   build:
     needs: plan
@@ -65,7 +68,12 @@ jobs:
           pkg-config --modversion wayland-scanner
 
       - name: Build
-        run: linux/turnip/build.sh "${{ matrix.variant }}" "${{ inputs.mesa_repo || 'https://gitlab.freedesktop.org/mesa/mesa.git' }}" "${{ inputs.mesa_ref || 'main' }}" out
+        run: |
+          if [ "${{ matrix.variant }}" = a8xx ]; then
+            linux/turnip/build.sh a8xx https://github.com/whitebelyash/mesa-tu8.git "${{ inputs.gen8_ref || 'gen8' }}" out
+          else
+            linux/turnip/build.sh "${{ matrix.variant }}" "${{ inputs.mesa_repo || 'https://gitlab.freedesktop.org/mesa/mesa.git' }}" "${{ inputs.mesa_ref || 'main' }}" out
+          fi
 
       - uses: actions/upload-artifact@v4
         with:
@@ -83,14 +91,16 @@ jobs:
           merge-multiple: true
       - id: tag
         run: |
-          base=$(basename "$(ls out/*.zip | head -1)" .zip)
-          # Turnip-<version>-<commit>-<variant>-Linux -> turnip-linux-<version>-<commit>
-          echo "tag=turnip-linux-$(echo "$base" | sed -E 's/^Turnip-//; s/-[a-z0-9]+-Linux$//')" >> "$GITHUB_OUTPUT"
+          # One release for the set; the variants can come from different Mesa trees and versions.
+          echo "tag=turnip-linux-$(date -u +%Y%m%d)-${{ github.run_number }}" >> "$GITHUB_OUTPUT"
       - uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.tag.outputs.tag }}
           name: Turnip Linux ${{ steps.tag.outputs.tag }}
           body: |
-            Linux (glibc aarch64, KGSL) Turnip for the SteamOS runtime, from ${{ inputs.mesa_repo }} @ ${{ inputs.mesa_ref }}.
-            Variants: a7xx = Mesa as it is; a6xx = no cached-coherent memory and sysmem rendering forced.
+            Linux (glibc aarch64, KGSL) Turnip for the SteamOS runtime, with the runtime's KGSL patches.
+            a7xx: Mesa ${{ inputs.mesa_ref }} (Adreno 7xx, Snapdragon 8 Gen 1-3).
+            a8xx: the gen8 fork @ ${{ inputs.gen8_ref }} (Adreno 8xx, Snapdragon 8 Elite).
+            a6xx: Mesa ${{ inputs.mesa_ref }}, no cached-coherent memory, sysmem rendering forced (Adreno 6xx).
+            Each zip's meta.json names its exact Mesa commit and the oldest glibc it needs.
           files: out/*.zip
