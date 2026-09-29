@@ -109,6 +109,8 @@ class MainActivity : ComponentActivity() {
     /** The game whose page is open (long press on its tile, or Y / Menu on a pad). */
     private var detailsFor by mutableStateOf<InstalledGame?>(null)
     private var storeGameFor by mutableStateOf<StoreGame?>(null)
+    /** The game whose settings are open, over its page: (the id Steam starts it with, its title). */
+    private var settingsFor by mutableStateOf<Pair<String, String>?>(null)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -119,6 +121,9 @@ class MainActivity : ComponentActivity() {
         setContent {
             AppTheme {
                 when {
+                    settingsFor != null -> settingsFor?.let { (id, title) ->
+                        GameSettingsRoute(id, title, onBack = { settingsFor = null })
+                    }
                     showProtons -> ProtonsRoute(onBack = { showProtons = false })
                     showSettings -> SettingsRoute(onBack = { showSettings = false })
                     detailsFor != null -> detailsFor?.let { game ->
@@ -127,10 +132,16 @@ class MainActivity : ComponentActivity() {
                             onBack = { detailsFor = null },
                             onPlay = { launch(game.appId) },
                             onPin = if (HomeShortcuts.supported(this)) ({ pin(game) }) else null,
+                            onSettings = { settingsFor = game.appId to game.name },
                         )
                     }
                     storeGameFor != null -> storeGameFor?.let { game ->
-                        StoreGameRoute(game, onBack = { storeGameFor = null }, onPlay = { launch(Stores.launchId(game)) })
+                        StoreGameRoute(
+                            game,
+                            onBack = { storeGameFor = null },
+                            onPlay = { launch(Stores.launchId(game)) },
+                            onSettings = { settingsFor = Stores.steamAppId(game) to game.title },
+                        )
                     }
                     else -> Home(
                         resumeCount, ::launch,
@@ -456,7 +467,11 @@ private fun Library(
             )
         }
         items(games, key = { it.appId }) { game ->
-            Tile(game.name, coverOf(game), onMenu = { onOpenDetails?.invoke(game) }) { onLaunch(game.appId) }
+            // A tap opens the game's page, where it is played from and its settings are; without a
+            // page (the screenshot tests) it launches.
+            Tile(game.name, coverOf(game), onMenu = { onOpenDetails?.invoke(game) }) {
+                if (onOpenDetails != null) onOpenDetails(game) else onLaunch(game.appId)
+            }
         }
     }
 }

@@ -154,7 +154,7 @@ class Screenshots {
                 com.steamoslite.games.StoreDetails(
                     "Chart a frozen frontier with your crew, one outpost at a time.", listOf("Adventure", "Exploration"), emptyList(),
                 ),
-                onBack = {}, onPlay = {}, onPin = {},
+                onBack = {}, onPlay = {}, onPin = {}, onSettings = {},
                 image = { _, _ -> null },
             )
         }
@@ -196,6 +196,20 @@ class Screenshots {
                 onBack = {}, onPlay = {}, onInstall = {}, onCancel = {}, onUninstall = {},
                 image = { _, _ -> null },
             )
+        }
+    }
+
+    @Test fun game_settings() = paparazzi.snapshot {
+        AppTheme {
+            GameSettingsScreen(
+                GameSettingsState(
+                    "Aurora Frontier",
+                    com.steamoslite.runtime.GameSettings(fexCore = "2609", fexPreset = com.steamoslite.runtime.Settings.FexPreset.COMPATIBILITY),
+                    fex = ComponentPick(listOf("2507", "2508", "2511", "2512", "2601", "2603", "2604", "2605", "2609"), selected = "2605"),
+                    dxvk = ComponentPick(listOf("1.11.1-sarek", "2.4.1-gplasync", "2.6.1-gplasync", "async-1.10.3")),
+                ),
+                onBack = {},
+            ) {}
         }
     }
 

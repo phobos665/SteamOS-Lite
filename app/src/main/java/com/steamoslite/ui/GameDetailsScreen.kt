@@ -6,6 +6,8 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
@@ -66,7 +68,13 @@ import java.util.Date
 
 /** A game's page with its data: read from the runtime's Steam client, plus the store's description. */
 @Composable
-internal fun GameDetailsRoute(game: InstalledGame, onBack: () -> Unit, onPlay: () -> Unit, onPin: (() -> Unit)?) {
+internal fun GameDetailsRoute(
+    game: InstalledGame,
+    onBack: () -> Unit,
+    onPlay: () -> Unit,
+    onPin: (() -> Unit)?,
+    onSettings: (() -> Unit)? = null,
+) {
     val context = LocalContext.current
     BackHandler(onBack = onBack)
     val details by produceState<GameDetails?>(null, game.appId) {
@@ -77,7 +85,7 @@ internal fun GameDetailsRoute(game: InstalledGame, onBack: () -> Unit, onPlay: (
         store = withContext(Dispatchers.IO) { StoreDetailsCache.cached(context, game.appId) }
         withContext(Dispatchers.IO) { StoreDetailsCache.load(context, game.appId) }?.let { store = it }
     }
-    GameDetailsScreen(game, details, store, onBack, onPlay, onPin)
+    GameDetailsScreen(game, details, store, onBack, onPlay, onPin, onSettings)
 }
 
 /** The page as drawn (the screenshot tests draw it too, with [image] loading nothing). */
@@ -90,6 +98,7 @@ internal fun GameDetailsScreen(
     onBack: () -> Unit,
     onPlay: () -> Unit,
     onPin: (() -> Unit)?,
+    onSettings: (() -> Unit)? = null,
     image: @Composable (source: Any?, maxPx: Int) -> Bitmap? = { source, maxPx -> rememberImage(source, maxPx) },
 ) {
     BoxWithConstraints(Modifier.fillMaxSize()) {
@@ -102,12 +111,21 @@ internal fun GameDetailsScreen(
         ) {
             item(key = "top") {
                 val play = remember { FocusRequester() }
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    OutlinedButton(onClick = onBack) { Text("Back") }
-                    Text(game.name, color = Color.White, fontSize = if (compact) 20.sp else 26.sp, fontWeight = FontWeight.Bold,
-                        maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
-                    Button(onClick = onPlay, modifier = Modifier.focusRequester(play)) { Text("Play", fontSize = 18.sp) }
-                    if (onPin != null) OutlinedButton(onClick = onPin) { Text("Add to home screen") }
+                Column {
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        OutlinedButton(onClick = onBack) { Text("Back") }
+                        Text(game.name, color = Color.White, fontSize = if (compact) 20.sp else 26.sp, fontWeight = FontWeight.Bold,
+                            maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                    }
+                    Row(
+                        Modifier.padding(top = 10.dp).horizontalScroll(rememberScrollState()),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    ) {
+                        Button(onClick = onPlay, modifier = Modifier.focusRequester(play)) { Text("Play", fontSize = 18.sp) }
+                        if (onSettings != null) OutlinedButton(onClick = onSettings) { Text("Game settings") }
+                        if (onPin != null) OutlinedButton(onClick = onPin) { Text("Add to home screen") }
+                    }
                 }
                 LaunchedEffect(Unit) { runCatching { play.requestFocus() } }
             }

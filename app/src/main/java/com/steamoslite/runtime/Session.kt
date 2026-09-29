@@ -121,11 +121,13 @@ class Session(
         // Only the chosen versions are unpacked before the session starts (the first start after
         // an install would otherwise unpack ~220 MB first); the rest follow in the background and
         // are needed no sooner than a game launch that names one.
-        guest += "BL_FEXCORE_ROOT=" + FexCore.prepare(context, listOf(FexCore.selected(context))).path
+        // Versions a game's own settings name are needed as early as the global one.
+        val games = GameSettingsStore.all(context).values
+        guest += "BL_FEXCORE_ROOT=" + FexCore.prepare(context, (games.mapNotNull { it.fexCore } + FexCore.selected(context)).distinct()).path
         guest += "BL_FEXCORE=" + FexCore.selected(context)
         // DXVK the same way, by running Proton from a mirror of its tree (Proton reinstalls its own
         // DXVK into the prefix at every start). Per game: BL_DXVK=2.6.1-gplasync %command%.
-        guest += "BL_DXVK_ROOT=" + Dxvk.prepare(context, listOf(Dxvk.selected(context))).path
+        guest += "BL_DXVK_ROOT=" + Dxvk.prepare(context, (games.mapNotNull { it.dxvk } + Dxvk.selected(context)).distinct()).path
         guest += "BL_DXVK=" + Dxvk.selected(context)
         mark("chosen FEXCore and DXVK ready")
         // 0 starts the client without its update check and file verification.

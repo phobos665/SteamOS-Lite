@@ -204,7 +204,7 @@ internal fun LazyGridScope.storeTabItems(
         Tile(
             game.title, coverOf(game), badge,
             onMenu = { actions.onOpen(game) },
-            onClick = { if (installed) actions.onPlay(game) else actions.onOpen(game) },
+            onClick = { actions.onOpen(game) },
         )
     }
 }

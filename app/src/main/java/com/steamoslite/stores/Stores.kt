@@ -51,6 +51,9 @@ object Stores {
         StoreShortcuts.sync(context)
     }
 
+    /** The id Steam starts the game's shortcut with, which its game settings are kept under. */
+    fun steamAppId(game: StoreGame) = StoreShortcuts.shortId(StoreShortcuts.key(game.store, game.id)).toString()
+
     /** What SessionActivity takes as its app id to start the game's Steam shortcut. */
     fun launchId(game: StoreGame) = StoreShortcuts.launchId(game.store, game.id)
 }
