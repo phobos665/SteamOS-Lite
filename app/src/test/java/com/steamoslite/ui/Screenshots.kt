@@ -123,11 +123,21 @@ class Screenshots {
                     refreshRates = listOf(120, 90, 60),
                     fex = ComponentPick(listOf("2507", "2508", "2511", "2512", "2601", "2603", "2604", "2605"), selected = "2605"),
                     dxvk = ComponentPick(listOf("1.11.1-sarek", "2.4.1-gplasync", "2.6.1-gplasync", "async-1.10.3")),
+                    gpu = com.steamoslite.runtime.VulkanDrivers.Gpu("Adreno 740", com.steamoslite.runtime.VulkanDrivers.Family.A7XX),
+                    drivers = listOf(driver),
+                    driver = driver.id,
+                    driverCatalog = listOf("a6xx", "a8xx").map {
+                        com.steamoslite.runtime.VulkanDrivers.CatalogDriver("Turnip-26.3.0-devel-4cf0989083-$it-Linux", "26.3.0-devel-4cf0989083", it, "", 0)
+                    },
                 ),
                 onBack = {},
             ) {}
         }
     }
+
+    private val driver = com.steamoslite.runtime.VulkanDrivers.Installed(
+        "Turnip-26.3.0-devel-4cf0989083-a7xx-Linux", "Turnip 26.3.0-devel (a7xx)", "a7xx", "1.4.363", java.io.File("icd.json"),
+    )
 
     /** A phone on its side: 2400 x 1080 at xxhdpi is only 360 dp tall. */
     @Test fun library_phone_landscape() {
@@ -214,6 +224,7 @@ class Screenshots {
                     com.steamoslite.runtime.GameSettings(fexCore = "2609", fexPreset = com.steamoslite.runtime.Settings.FexPreset.COMPATIBILITY),
                     fex = ComponentPick(listOf("2507", "2508", "2511", "2512", "2601", "2603", "2604", "2605", "2609"), selected = "2605"),
                     dxvk = ComponentPick(listOf("1.11.1-sarek", "2.4.1-gplasync", "2.6.1-gplasync", "async-1.10.3")),
+                    drivers = listOf(driver),
                 ),
                 onBack = {},
             ) {}

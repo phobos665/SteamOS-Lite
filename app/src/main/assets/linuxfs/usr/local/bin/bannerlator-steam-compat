@@ -100,6 +100,8 @@ bl_game_settings() {
   while IFS='=' read -r k v || [ -n "$k" ]; do
     case $k in
       BL_FEXCORE|BL_DXVK|FEX_[A-Z0-9_]*) export "$k=$v" ;;
+      # A driver removed since would leave the game with no Vulkan at all.
+      VK_DRIVER_FILES|VK_ICD_FILENAMES) [ ! -r "$v" ] || export "$k=$v" ;;
     esac
   done < "$f"
   echo "bannerlator-proton: game settings for app $id applied" >&2

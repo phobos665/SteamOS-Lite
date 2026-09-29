@@ -13,6 +13,8 @@ data class GameSettings(
     val fexCore: String? = null,
     val dxvk: String? = null,
     val fexPreset: Settings.FexPreset? = null,
+    /** A Vulkan driver's id, or [VulkanDrivers.RUNTIME] for the runtime's own. */
+    val vkDriver: String? = null,
 ) {
     val isDefault get() = this == GameSettings()
 
@@ -20,13 +22,18 @@ data class GameSettings(
         fexCore?.let { put("fexCore", it) }
         dxvk?.let { put("dxvk", it) }
         fexPreset?.let { put("fexPreset", it.name) }
+        vkDriver?.let { put("vkDriver", it) }
     }
 
     /** What the Proton launchers read when the game starts: the same variables the session sets globally. */
-    fun toEnv(): String = buildString {
+    fun toEnv(icd: (String) -> File?): String = buildString {
         fexCore?.let { append("BL_FEXCORE=").append(it.ifEmpty { "proton" }).append('\n') }
         dxvk?.let { append("BL_DXVK=").append(it.ifEmpty { "proton" }).append('\n') }
         fexPreset?.env?.forEach { (k, v) -> append(k).append('=').append(v).append('\n') }
+        vkDriver?.let(icd)?.let {
+            append("VK_DRIVER_FILES=").append(it.path).append('\n')
+            append("VK_ICD_FILENAMES=").append(it.path).append('\n')
+        }
     }
 
     companion object {
@@ -35,6 +42,7 @@ data class GameSettings(
             dxvk = o.optString("dxvk").takeIf { o.has("dxvk") },
             fexPreset = o.optString("fexPreset").takeIf { it.isNotEmpty() }
                 ?.let { runCatching { Settings.FexPreset.valueOf(it) }.getOrNull() },
+            vkDriver = o.optString("vkDriver").takeIf { o.has("vkDriver") },
         )
     }
 }
@@ -64,7 +72,7 @@ object GameSettingsStore {
         }
         FileUtils.writeString(json, settings.toJson().toString())
         env.parentFile?.mkdirs()
-        FileUtils.writeString(env, settings.toEnv())
+        FileUtils.writeString(env, settings.toEnv { VulkanDrivers.icd(context, it) })
     }
 
     fun all(context: Context): Map<String, GameSettings> =

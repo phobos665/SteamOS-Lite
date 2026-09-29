@@ -133,6 +133,7 @@ class Session(
         // 0 starts the client without its update check and file verification.
         guest += "BL_STEAM_UPDATES=" + if (Settings.steamUpdates(context)) "1" else "0"
         LinuxRuntime.vulkanIcd(context)?.let { guest += "VK_ICD_FILENAMES=" + it.path }
+        if (VulkanDrivers.selected(context) != VulkanDrivers.RUNTIME) VulkanDrivers.selectedIcd(context)?.let { guest += "BL_VK_DRIVER=" + it.path }
         FakeInputWriter.getRingEnv(fakeInputDir).takeIf { it.isNotEmpty() }?.let { guest += "FAKE_EVDEV_MEMFD_PATHS=$it" }
         guest += LinuxRuntime.SESSION_SCRIPT
         guest += LinuxRuntime.MODE_STEAM
