@@ -40,6 +40,9 @@ collect_steam_logs() {
 # runtime keeps the Turnip it was built with. VK_DRIVER_FILES REPLACES the loader's search, so a
 # manifest whose library is unreadable would leave the session with no Vulkan at all - check both
 # before setting it, and say so in the log rather than fail silently half a minute later.
+# The runtime's own manifest, kept for the fallback below (this script runs twice: the second time
+# inside gamescope, with the imported driver already exported).
+export BL_RUNTIME_ICD=${BL_RUNTIME_ICD:-${VK_ICD_FILENAMES:-}}
 if [ -n "${BL_VK_DRIVER:-}" ]; then
   bl_icd_lib=$(sed -n 's/.*"library_path"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$BL_VK_DRIVER" 2>/dev/null | head -1)
   # JSON may escape the separator: org.json writes "\/data\/user\/0\/...". The Vulkan loader
@@ -101,7 +104,10 @@ if [ -z "${BL_INSIDE:-}" ]; then
   fi
   step "starting gamescope"
   export BL_INSIDE=1
-  exec gamescope "${args[@]}" -- "$0" "$mode" "$@"
+  # BL_STOCK_GAMESCOPE=1 runs the runtime's own gamescope instead of the patched build the app stages.
+  gamescope_bin=gamescope
+  [ "${BL_STOCK_GAMESCOPE:-0}" = 1 ] && gamescope_bin=/usr/bin/gamescope
+  exec "$gamescope_bin" "${args[@]}" -- "$0" "$mode" "$@"
 fi
 
 # gamescope manages X windows: toolkits go through Xwayland, not gamescope's own Wayland socket.
@@ -495,12 +501,24 @@ BUSCONF
         echo "$steam_channel" > "$steam_root/package/beta"
       fi
       step "starting the Steam client"
+      client_started=$SECONDS
       "$steam_root/steamrtarm64/steam" "${client_ui[@]}" -clientbeta "$steam_channel" "${update_args[@]}" \
         -no-cef-sandbox -cef-force-gpu -cef-ozone-platform=x11 \
         -cef-use-gl=angle -cef-use-angle=vulkan "$@"
       rc=$?
       echo "== steam exited rc=$rc"
       collect_steam_logs
+      # An imported driver that crashes the client as it starts (killed by a signal within a minute)
+      # would end every session the same way. Start it again once on the runtime's own Turnip, and
+      # leave a note the app reads to put the setting back.
+      if [ "$rc" -gt 128 ] && [ $((SECONDS - client_started)) -lt 60 ] && [ -n "${VK_DRIVER_FILES:-}" ] \
+         && [ "${VK_DRIVER_FILES}" = "${BL_VK_DRIVER:-}" ] && [ -n "$BL_RUNTIME_ICD" ]; then
+        echo "== vulkan driver: the client crashed (rc=$rc) on $BL_VK_DRIVER; restarting it on the runtime's own Turnip"
+        printf '%s\n' "$BL_VK_DRIVER" > "$HOME/.bl-driver-failed"
+        unset VK_DRIVER_FILES
+        export VK_ICD_FILENAMES=$BL_RUNTIME_ICD
+        continue
+      fi
       # The session asked for this exit (the ARM64 Proton landed): start again without the URL
       # arguments, which were acted on.
       if [ -f "$HOME/.bl-restart-once" ]; then

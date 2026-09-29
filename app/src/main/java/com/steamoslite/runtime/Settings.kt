@@ -22,6 +22,7 @@ object Settings {
     private const val CLIENT_TUNING = "clientTuning"
     private const val NO_XALIA = "noXalia"
     private const val DECK_MODE = "deckMode"
+    private const val PATCHED_GAMESCOPE = "patchedGamescope"
     private const val KEEP_RUNNING = "keepRunning"
     private const val VKD3D_FEATURE_LEVEL = "vkd3dFeatureLevel"
     private const val VKD3D_SHADER_MODEL = "vkd3dShaderModel"
@@ -141,6 +142,11 @@ object Settings {
     fun noXalia(context: Context) = prefs(context).getBoolean(NO_XALIA, true)
 
     fun setNoXalia(context: Context, on: Boolean) = put(context) { putBoolean(NO_XALIA, on) }
+
+    /** The patched gamescope the app stages (touch in Big Picture, realtime queues); off runs the runtime's own. */
+    fun patchedGamescope(context: Context) = prefs(context).getBoolean(PATCHED_GAMESCOPE, true)
+
+    fun setPatchedGamescope(context: Context, on: Boolean) = put(context) { putBoolean(PATCHED_GAMESCOPE, on) }
 
     /** Steam as on a Steam Deck: the Quick Access Menu, battery, NIS scaling and the performance overlay. */
     fun deckMode(context: Context) = prefs(context).getBoolean(DECK_MODE, false)

@@ -193,7 +193,11 @@ internal fun SettingsRoute(onBack: () -> Unit) {
         }
     }
     LaunchedEffect(Unit) {
+        val failed = withContext(Dispatchers.IO) { VulkanDrivers.takeFailure(context) }
         reload()
+        if (failed != null) {
+            state = state.copy(message = "$failed crashed Steam as it started, so SteamOS went back to the built-in Turnip. Try another build.")
+        }
         val releases = withContext(Dispatchers.IO) { TurnipReleases.fetch() }
         state = state.copy(driverCatalog = releases.filter { it.linux }, displayCatalog = releases.filter { !it.linux })
     }
@@ -739,8 +743,9 @@ internal fun DriverChoice(state: SettingsState, onChange: (SettingsChange) -> Un
     Choice(
         "Vulkan driver",
         (state.gpu?.let { "This device: ${it.name}" + (it.family?.let { f -> " (${f.variant} builds)" } ?: "") + ". " } ?: "") +
-            "What Steam, gamescope and every game draw with. Newer Turnip builds can run games faster or fix " +
-            "rendering; if one misbehaves, go back to the built-in one. A game's own settings can pick another.",
+            "What Steam, gamescope and every game draw with. The built-in Turnip is the tested one; the downloads " +
+            "are development builds that can run games faster or fix rendering, or fail to start Steam, in which case " +
+            "the session falls back to the built-in one. A game's own settings can pick another.",
         listOf(VulkanDrivers.RUNTIME) + state.drivers.map { it.id }, state.driver,
         label = { id ->
             if (id == VulkanDrivers.RUNTIME) "Built-in Turnip"
@@ -752,7 +757,7 @@ internal fun DriverChoice(state: SettingsState, onChange: (SettingsChange) -> Un
                 SecondaryButton(onClick = { onChange(SettingsChange.DriverInstall(d)) }) {
                     Text(
                         if (progress != null) "Downloading ${(progress * 100).toInt()}%"
-                        else "Download ${d.label}" + if (recommended(d)) " (recommended)" else "",
+                        else "Download ${d.label}" + if (recommended(d)) " (for this GPU)" else "",
                     )
                 }
             }
@@ -831,6 +836,12 @@ internal enum class SettingFlag(
         "Steam", "Faster Steam interface",
         "Lazy descriptors, threaded GL and no GL error checks for Steam's interface, which draws with OpenGL on Vulkan.",
         true, Settings::clientTuning, Settings::setClientTuning,
+    ),
+    PATCHED_GAMESCOPE(
+        "Steam", "Patched gamescope",
+        "Touch in Big Picture and realtime GPU priority for the compositor. Turn off to use the runtime's own " +
+            "gamescope if the picture misbehaves.",
+        true, Settings::patchedGamescope, Settings::setPatchedGamescope,
     ),
     DECK_MODE(
         "Steam", "Steam Deck mode",

@@ -53,6 +53,19 @@ object VulkanDrivers {
         Settings.prefs(context).edit().putString(SELECTED, id).commit()
     }
 
+    /**
+     * When a session had to fall back from the chosen driver (it crashed the Steam client as it
+     * started), the choice goes back to the runtime's own. Returns that driver's name, once.
+     */
+    fun takeFailure(context: Context): String? {
+        val note = File(LinuxRuntime.rootDir(context), "root/.bl-driver-failed")
+        val icd = runCatching { note.readText().trim() }.getOrNull()?.takeIf { it.isNotEmpty() } ?: return null
+        note.delete()
+        val dir = File(icd).parentFile ?: return null
+        if (selected(context) == dir.name) select(context, RUNTIME)
+        return installed(context).firstOrNull { it.id == dir.name }?.name ?: dir.name
+    }
+
     /** The manifest the session is told to use (BL_VK_DRIVER), or null for the runtime's own. */
     fun selectedIcd(context: Context): File? = icd(context, selected(context))
 

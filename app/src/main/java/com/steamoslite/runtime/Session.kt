@@ -53,6 +53,7 @@ class Session(
         finishAbandonedLogs(context)
         LinuxRuntime.writeAccounts(context)
         OfflineMode.apply(context)
+        VulkanDrivers.takeFailure(context)?.let { Log.w(TAG, "the Vulkan driver $it crashed Steam last time; back to the runtime's own") }
 
         // Refreshed every session, so what runs is always what this APK carries.
         TarZstd.extractAsset(context, "pulseaudio.tzst", PulseAudio.workingDir(context))
@@ -119,6 +120,7 @@ class Session(
         if (Settings.clientTuning(context)) Settings.CLIENT_TUNING_ENV.forEach { (k, v) -> guest += "$k=$v" }
         if (Settings.noXalia(context)) guest += "PROTON_USE_XALIA=0"
         if (Settings.deckMode(context)) guest += "BL_STEAMDECK=1"
+        if (!Settings.patchedGamescope(context)) guest += "BL_STOCK_GAMESCOPE=1"
         // Games launched from the client run x86 code under FEX, with Settings' preset
         // (Intermediate by default: without store ordering, multithreaded titles can hang at load).
         Settings.fexPreset(context).env.forEach { (k, v) -> guest += "$k=$v" }
