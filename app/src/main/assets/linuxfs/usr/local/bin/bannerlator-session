@@ -242,6 +242,31 @@ case $mode in
         fi
       done
     ) &
+    # A game started from the app while SteamOS keeps running arrives as a steam:// line in
+    # ~/.bl-launch. It goes to the running client through its command pipe, the way Valve's steam.sh
+    # hands a URL to a client that is already up; with no pipe, a second client process is started
+    # with the URL, which passes it to the first. The file is renamed before it is read, so a line
+    # the app appends meanwhile lands in a new file and waits for the next pass.
+    rm -f "$HOME/.bl-launch" "$HOME/.bl-launch.taking"
+    (
+      while :; do
+        sleep 1
+        [ -s "$HOME/.bl-launch" ] || continue
+        mv -f "$HOME/.bl-launch" "$HOME/.bl-launch.taking" 2>/dev/null || continue
+        while read -r _bl_url || [ -n "$_bl_url" ]; do
+          case $_bl_url in steam://*) ;; *) continue ;; esac
+          if [ -p "$HOME/.steam/steam.pipe" ] &&
+            timeout 5 sh -c 'printf "%s\n" "$1" > "$HOME/.steam/steam.pipe"' _ "$_bl_url"; then
+            step "handed $_bl_url to the running client"
+          else
+            step "no client pipe; passing $_bl_url through a second client process"
+            "$steam_root/steamrtarm64/steam" "$_bl_url" >/dev/null 2>&1 &
+          fi
+        done < "$HOME/.bl-launch.taking"
+        rm -f "$HOME/.bl-launch.taking"
+      done
+    ) &
+    launch_watch=$!
     # Debug aid while the runtime is being brought up: an app id dropped in ~/.bl-autolaunch is
     # handed to the client as a rungameid URL, so a launch can be reproduced without touching the
     # screen. Removed once the runtime is stable.
@@ -351,7 +376,7 @@ BUSCONF
       collect_steam_logs
       [ "$rc" -eq 42 ] || break
     done
-    kill ${netmanager:-} ${system_bus:-} 2>/dev/null || true
+    kill ${netmanager:-} ${system_bus:-} ${launch_watch:-} 2>/dev/null || true
     reap_orphans
     exit "$rc"
     ;;

@@ -37,7 +37,7 @@ internal class StartupTimeline(private val t0: Long) {
     }
 
     @Synchronized
-    fun write(dir: File?) {
+    fun write(dir: File?, name: String = "startup.txt") {
         dir ?: return
         val text = buildString {
             append("Seconds from the launch tap. STEP lines come from the session script, steam: lines from\n")
@@ -46,7 +46,7 @@ internal class StartupTimeline(private val t0: Long) {
                 append(String.format(Locale.US, "%7.1f  %s\n", (at - t0) / 1000.0, what))
             }
         }
-        runCatching { File(dir, "startup.txt").writeText(text) }
+        runCatching { File(dir, name).writeText(text) }
     }
 
     private fun utcToday(stamp: String): Long? {

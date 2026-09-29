@@ -58,7 +58,7 @@ jobs:
             aarch64-linux-gnu-nm -D --defined-only "$D/libfakeinput.so" | awk '{print $NF}' | grep -qx "$sym" \
               || { echo "::error::libfakeinput.so does not export $sym"; exit 1; }
           done
-          for sym in socket bind getsockname statfs; do
+          for sym in socket bind getsockname statfs fallocate posix_fallocate; do
             aarch64-linux-gnu-nm -D --defined-only "$D/libblsession.so" | awk '{print $NF}' | grep -qx "$sym" \
               || { echo "::error::libblsession.so does not export $sym"; exit 1; }
           done

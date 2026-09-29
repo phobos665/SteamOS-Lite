@@ -17,6 +17,7 @@ object Settings {
     private const val STEAM_UPDATES = "steamUpdates"
     private const val PROTON_LOG = "protonLog"
     private const val CLIENT_ALL_CORES = "clientAllCores"
+    private const val KEEP_RUNNING = "keepRunning"
     const val ON_SCREEN = "onScreenController"
 
     /** gamescope's output: what Steam and every game render at, scaled to the screen. */
@@ -97,6 +98,11 @@ object Settings {
     fun clientAllCores(context: Context) = prefs(context).getBoolean(CLIENT_ALL_CORES, true)
 
     fun setClientAllCores(context: Context, on: Boolean) = put(context) { putBoolean(CLIENT_ALL_CORES, on) }
+
+    /** Leaving SteamOS keeps it running in the background, so coming back or starting a game skips the boot. */
+    fun keepRunning(context: Context) = prefs(context).getBoolean(KEEP_RUNNING, true)
+
+    fun setKeepRunning(context: Context, on: Boolean) = put(context) { putBoolean(KEEP_RUNNING, on) }
 
     /** The touch gamepad shown when a session starts (the quick menu toggles it, and saves that). */
     fun onScreenController(context: Context) = prefs(context).getBoolean(ON_SCREEN, false)

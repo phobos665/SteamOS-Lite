@@ -70,6 +70,12 @@
             android:exported="false"
             android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboard|keyboardHidden" />
 
+        <!-- Holds the :session process while SteamOS runs with no screen showing it. -->
+        <service
+            android:name=".ui.SessionKeepAlive"
+            android:process=":session"
+            android:exported="false" />
+
         <service
             android:name=".stores.StoreDownloadService"
             android:exported="false"

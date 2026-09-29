@@ -57,7 +57,7 @@ class Screenshots {
         }.toMap()
     }
 
-    private fun home(state: RuntimeState, withGames: Boolean = true, shareLogs: Boolean = false) = paparazzi.snapshot {
+    private fun home(state: RuntimeState, withGames: Boolean = true, shareLogs: Boolean = false, running: Boolean = false) = paparazzi.snapshot {
         AppTheme {
             HomeScreen(
                 state = state,
@@ -70,9 +70,13 @@ class Screenshots {
                 onOpenProtons = if (shareLogs) ({}) else null,
                 onOpenSettings = {},
                 coverOf = { covers[it.appId] },
+                sessionRunning = running,
+                onStopSession = {},
             )
         }
     }
+
+    @Test fun library_steamos_running() = home(RuntimeState.Ready("r9", null), running = true)
 
     @Test fun setup() = home(RuntimeState.Missing(release))
 
