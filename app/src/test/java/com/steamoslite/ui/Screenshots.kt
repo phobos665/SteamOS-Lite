@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import app.cash.paparazzi.DeviceConfig
 import app.cash.paparazzi.Paparazzi
@@ -194,13 +195,21 @@ class Screenshots {
         home(RuntimeState.Ready("r9", null), shareLogs = true, tabs = true)
     }
 
-    @Test fun game_details() = paparazzi.snapshot {
+    private fun ach(i: Int, unlocked: Boolean, hidden: Boolean = false) = com.steamoslite.util.SteamFiles.Achievement(
+        "ACH_$i", listOf("First Steps", "Frontier Scout", "Long Haul", "Night Owl", "Completionist")[i],
+        listOf("Finish the prologue.", "Map every outpost.", "Travel 1,000 km.", "Play after midnight.", "Earn every other achievement.")[i],
+        hidden, unlocked, if (unlocked) 1_758_000_000L + i * 86_400L else 0L, null, null,
+    )
+
+    private val achievements = listOf(ach(0, true), ach(1, true), ach(2, false), ach(3, false, hidden = true), ach(4, false))
+    private val allAchievements = (0..4).map { ach(it, true) }
+
+    @Test fun game_details() = gameDetails(achievements)
+
+    @Test fun game_details_complete() = gameDetails(allAchievements)
+
+    private fun gameDetails(list: List<com.steamoslite.util.SteamFiles.Achievement>) = paparazzi.snapshot {
         val game = games[0].first
-        fun ach(i: Int, unlocked: Boolean, hidden: Boolean = false) = com.steamoslite.util.SteamFiles.Achievement(
-            "ACH_$i", listOf("First Steps", "Frontier Scout", "Long Haul", "Night Owl", "Completionist")[i],
-            listOf("Finish the prologue.", "Map every outpost.", "Travel 1,000 km.", "Play after midnight.", "Earn every other achievement.")[i],
-            hidden, unlocked, if (unlocked) 1_758_000_000L + i * 86_400L else 0L, null, null,
-        )
         AppTheme(stillFrame = true) {
             GameDetailsScreen(
                 game,
@@ -208,7 +217,7 @@ class Screenshots {
                     game, null,
                     com.steamoslite.util.SteamFiles.Playtime(754, 1_758_900_000),
                     com.steamoslite.util.SteamFiles.AppInfo("Aurora Frontier", "Northlight", "Northlight", 1_700_000_000, 88, 3, "full", 92),
-                    listOf(ach(0, true), ach(1, true), ach(2, false), ach(3, false, hidden = true), ach(4, false)),
+                    list,
                 ),
                 com.steamoslite.games.StoreDetails(
                     "Chart a frozen frontier with your crew, one outpost at a time.", listOf("Adventure", "Exploration"), emptyList(),
@@ -312,6 +321,30 @@ class Screenshots {
             })
         },
     )
+
+    private fun sessionAchievements(list: List<com.steamoslite.util.SteamFiles.Achievement> = achievements) = paparazzi.snapshot {
+        AppTheme(stillFrame = true) {
+            Box(Modifier.fillMaxSize().background(Color(0xFF203040))) {
+                SessionAchievements(games[0].first.appId, "Aurora Frontier", read = true, list = list, onClose = {}, image = { _, _ -> null })
+            }
+        }
+    }
+
+    @Test fun session_achievements() = sessionAchievements()
+
+    @Test fun session_achievements_complete() = sessionAchievements(allAchievements)
+
+    @Test fun session_achievements_phone_landscape() {
+        paparazzi.unsafeUpdateConfig(
+            deviceConfig = DeviceConfig.PIXEL_5.copy(
+                screenWidth = 2400,
+                screenHeight = 1080,
+                density = Density.XXHIGH,
+                orientation = ScreenOrientation.LANDSCAPE,
+            ),
+        )
+        sessionAchievements()
+    }
 
     @Test fun session_on_screen_controller() = paparazzi.snapshot(
         android.widget.FrameLayout(paparazzi.context).apply {
