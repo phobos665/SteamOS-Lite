@@ -155,6 +155,20 @@ class MainActivity : ComponentActivity() {
         resumeCount++
     }
 
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        if (hasFocus) hideSystemBars()
+    }
+
+    /** Full screen, like the session: on a phone in landscape the status bar alone is a tenth of the height. */
+    @Suppress("DEPRECATION")
+    private fun hideSystemBars() {
+        window.decorView.systemUiVisibility = (android.view.View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
+            or android.view.View.SYSTEM_UI_FLAG_FULLSCREEN or android.view.View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
+            or android.view.View.SYSTEM_UI_FLAG_LAYOUT_STABLE or android.view.View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
+            or android.view.View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION)
+    }
+
     private fun pin(game: InstalledGame) {
         if (!HomeShortcuts.pin(this, game)) {
             Toast.makeText(this, "The home screen did not accept the shortcut.", Toast.LENGTH_LONG).show()
@@ -302,20 +316,24 @@ internal fun HomeScreen(
     // as one grid with the header, so the header does not keep a strip of the screen for itself.
     BoxWithConstraints(Modifier.fillMaxSize()) {
         val layout = HomeLayout.of(maxHeight)
-        val title: @Composable () -> Unit = {
-            Row(verticalAlignment = Alignment.CenterVertically) {
+        val title: @Composable (middle: @Composable () -> Unit) -> Unit = { middle ->
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(layout.gap)) {
                 Text(
                     buildAnnotatedString {
                         append("SteamOS ")
                         withStyle(SpanStyle(color = AppColors.accent)) { append("Lite") }
                     },
-                    fontSize = layout.titleSize, fontWeight = FontWeight.Bold, color = AppColors.text, modifier = Modifier.weight(1f),
+                    fontSize = layout.titleSize, fontWeight = FontWeight.Bold, color = AppColors.text, maxLines = 1,
                 )
+                middle()
+                Spacer(Modifier.weight(1f))
                 if (onOpenSettings != null) {
                     SecondaryButton(onClick = onOpenSettings) {
-                        Icon(Icons.Filled.Settings, contentDescription = null)
-                        Spacer(Modifier.width(8.dp))
-                        Text("Settings")
+                        Icon(Icons.Filled.Settings, contentDescription = "Settings")
+                        if (!layout.compact) {
+                            Spacer(Modifier.width(8.dp))
+                            Text("Settings")
+                        }
                     }
                 }
             }
@@ -325,7 +343,7 @@ internal fun HomeScreen(
                 tab, onSelectTab, storeTab, storeActions, storeCoverOf, sessionRunning, onStopSession)
         } else {
             Column(Modifier.fillMaxSize().enterFade().verticalScroll(rememberScrollState()).padding(layout.padding)) {
-                title()
+                title {}
                 Spacer(Modifier.height(layout.gap))
                 when (state) {
                     RuntimeState.Checking -> Text("Checking…", color = AppColors.textMuted)
@@ -348,18 +366,26 @@ internal fun HomeScreen(
  * tight margins, so a full row of covers fits under the header; a handheld's taller screen keeps
  * the roomier layout.
  */
-internal data class HomeLayout(val padding: Dp, val gap: Dp, val titleSize: TextUnit, val buttonText: TextUnit, val tileWidth: Dp) {
+internal data class HomeLayout(
+    val padding: Dp,
+    val gap: Dp,
+    val titleSize: TextUnit,
+    val buttonText: TextUnit,
+    val tileWidth: Dp,
+    val compact: Boolean = false,
+) {
     companion object {
         fun of(height: Dp): HomeLayout {
             val compact = height < 480.dp
             // A tile about half the screen tall (2:3 covers), between 96 and 210 dp.
-            val tileHeight = (height * 0.5f).coerceIn(96.dp, 210.dp)
+            val tileHeight = (height * if (compact) 0.45f else 0.5f).coerceIn(96.dp, 210.dp)
             return HomeLayout(
                 padding = if (compact) 12.dp else 24.dp,
                 gap = if (compact) 8.dp else 16.dp,
                 titleSize = if (compact) 20.sp else 28.sp,
                 buttonText = if (compact) 14.sp else 18.sp,
                 tileWidth = tileHeight * (2f / 3f),
+                compact = compact,
             )
         }
     }
@@ -398,7 +424,7 @@ private fun Library(
     s: RuntimeState.Ready,
     games: List<InstalledGame>,
     layout: HomeLayout,
-    title: @Composable () -> Unit,
+    title: @Composable (middle: @Composable () -> Unit) -> Unit,
     onLaunch: (String?) -> Unit,
     onUpdate: () -> Unit,
     onShareLogs: (() -> Unit)?,
@@ -437,7 +463,11 @@ private fun Library(
             horizontalArrangement = Arrangement.spacedBy(layout.gap),
             verticalArrangement = Arrangement.spacedBy(layout.gap),
         ) {
-            item(key = "title", span = full) { title() }
+            // A short screen keeps the tabs in the title row, so the first row of games stays in view.
+            val tabsInTitle = layout.compact && onSelectTab != null
+            item(key = "title", span = full) {
+                title { if (tabsInTitle && onSelectTab != null) LibraryTabs(tab, layout.gap, onSelectTab, compact = true) }
+            }
             item(key = "actions", span = full) {
                 // One line whatever the width: on a narrow screen it scrolls sideways instead of wrapping.
                 Row(Modifier.focusScrollRow(), verticalAlignment = Alignment.CenterVertically,
@@ -451,12 +481,12 @@ private fun Library(
                     if (onShareLogs != null) SecondaryButton(onClick = onShareLogs) { Text("Share logs") }
                 }
             }
-            if (onSelectTab != null) item(key = "tabs", span = full) { LibraryTabs(tab, layout.gap, onSelectTab) }
+            if (onSelectTab != null && !tabsInTitle) item(key = "tabs", span = full) { LibraryTabs(tab, layout.gap, onSelectTab) }
             if (tab != null) {
                 storeTabItems(storeTab, storeActions, layout, storeCoverOf) { focusedArt = it }
                 return@LazyVerticalGrid
             }
-            item(key = "label", span = full) {
+            if (!layout.compact || games.isEmpty()) item(key = "label", span = full) {
                 Text(
                     if (games.isEmpty()) "No games installed yet. Launch SteamOS, sign in and install some - they appear here."
                     else "Installed (${games.size})",

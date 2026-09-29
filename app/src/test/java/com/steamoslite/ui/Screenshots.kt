@@ -57,7 +57,13 @@ class Screenshots {
         }.toMap()
     }
 
-    private fun home(state: RuntimeState, withGames: Boolean = true, shareLogs: Boolean = false, running: Boolean = false) = paparazzi.snapshot {
+    private fun home(
+        state: RuntimeState,
+        withGames: Boolean = true,
+        shareLogs: Boolean = false,
+        running: Boolean = false,
+        tabs: Boolean = false,
+    ) = paparazzi.snapshot {
         AppTheme(stillFrame = true) {
             HomeScreen(
                 state = state,
@@ -72,6 +78,7 @@ class Screenshots {
                 coverOf = { covers[it.appId] },
                 sessionRunning = running,
                 onStopSession = {},
+                onSelectTab = if (tabs) ({}) else null,
             )
         }
     }
@@ -132,7 +139,7 @@ class Screenshots {
                 orientation = ScreenOrientation.LANDSCAPE,
             ),
         )
-        home(RuntimeState.Ready("r9", null), shareLogs = true)
+        home(RuntimeState.Ready("r9", null), shareLogs = true, tabs = true)
     }
 
     @Test fun game_details() = paparazzi.snapshot {

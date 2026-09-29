@@ -46,6 +46,7 @@ import androidx.compose.ui.layout.positionInParent
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
 
@@ -123,7 +124,14 @@ internal fun CardColumn(modifier: Modifier = Modifier, content: @Composable Colu
  * whichever is picked next.
  */
 @Composable
-internal fun <T> PillTabs(options: List<T>, selected: T, label: (T) -> String, onSelect: (T) -> Unit, modifier: Modifier = Modifier) {
+internal fun <T> PillTabs(
+    options: List<T>,
+    selected: T,
+    label: (T) -> String,
+    onSelect: (T) -> Unit,
+    modifier: Modifier = Modifier,
+    compact: Boolean = false,
+) {
     val index = options.indexOf(selected)
     // Each option's left edge and width, once laid out.
     val bounds = remember { mutableStateMapOf<Int, Pair<Float, Float>>() }
@@ -167,9 +175,9 @@ internal fun <T> PillTabs(options: List<T>, selected: T, label: (T) -> String, o
                     .clip(AppShapes.pill)
                     .background(if (chosen && !sliding) accent else Color.Transparent)
                     .clickable(interaction, indication = null, role = Role.Tab) { onSelect(option) }
-                    .padding(horizontal = 22.dp, vertical = 10.dp),
+                    .padding(horizontal = if (compact) 14.dp else 22.dp, vertical = if (compact) 6.dp else 10.dp),
             ) {
-                Text(label(option), color = textColor, fontWeight = FontWeight.SemiBold)
+                Text(label(option), color = textColor, fontWeight = FontWeight.SemiBold, fontSize = if (compact) 14.sp else 16.sp)
             }
         }
     }

@@ -134,9 +134,9 @@ internal fun rememberStoreTab(
 }
 
 @Composable
-internal fun LibraryTabs(selected: Store?, gap: androidx.compose.ui.unit.Dp, onSelect: (Store?) -> Unit) {
-    Row(Modifier.focusScrollRow().padding(vertical = gap / 4)) {
-        PillTabs(listOf<Store?>(null) + Store.entries, selected, label = { it?.label ?: "Steam" }, onSelect = onSelect)
+internal fun LibraryTabs(selected: Store?, gap: androidx.compose.ui.unit.Dp, onSelect: (Store?) -> Unit, compact: Boolean = false) {
+    Row(Modifier.focusScrollRow().padding(vertical = if (compact) 0.dp else gap / 4)) {
+        PillTabs(listOf<Store?>(null) + Store.entries, selected, label = { it?.label ?: "Steam" }, onSelect = onSelect, compact = compact)
     }
 }
 
