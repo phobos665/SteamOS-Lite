@@ -111,6 +111,8 @@ class Session(
         if (Settings.clientAllCores(context)) {
             guest += "BL_CLIENT_CPUS=" + (0 until Runtime.getRuntime().availableProcessors()).joinToString(",")
         }
+        if (Settings.clientTuning(context)) Settings.CLIENT_TUNING_ENV.forEach { (k, v) -> guest += "$k=$v" }
+        if (Settings.noXalia(context)) guest += "PROTON_USE_XALIA=0"
         // Games launched from the client run x86 code under FEX, with Settings' preset
         // (Intermediate by default: without store ordering, multithreaded titles can hang at load).
         Settings.fexPreset(context).env.forEach { (k, v) -> guest += "$k=$v" }

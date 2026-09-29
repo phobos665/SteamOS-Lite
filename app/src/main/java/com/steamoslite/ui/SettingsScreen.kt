@@ -1,5 +1,6 @@
 package com.steamoslite.ui
 
+import android.content.Context
 import android.net.Uri
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -17,6 +18,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -77,6 +79,7 @@ internal data class SettingsState(
     val clientAllCores: Boolean = true,
     val keepRunning: Boolean = true,
     val onScreen: Boolean = false,
+    val flags: Map<SettingFlag, Boolean> = SettingFlag.entries.associateWith { it.default },
     val gpu: VulkanDrivers.Gpu? = null,
     val drivers: List<VulkanDrivers.Installed> = emptyList(),
     val driver: String = VulkanDrivers.RUNTIME,
@@ -107,6 +110,7 @@ internal sealed interface SettingsChange {
     data class CompatFlags(val on: Boolean) : SettingsChange
     data class ProtonLog(val on: Boolean) : SettingsChange
     data class ClientAllCores(val on: Boolean) : SettingsChange
+    data class Flag(val flag: SettingFlag, val on: Boolean) : SettingsChange
     data class KeepRunning(val on: Boolean) : SettingsChange
     data class OnScreen(val on: Boolean) : SettingsChange
     data class Driver(val id: String) : SettingsChange
@@ -152,6 +156,7 @@ internal fun SettingsRoute(onBack: () -> Unit) {
                 onScreen = Settings.onScreenController(context),
                 frontendDir = FrontendExport.dir(context)?.path,
                 shortcutTest = SteamShortcuts.testEnabled(context),
+                flags = SettingFlag.entries.associateWith { it.get(context) },
                 gpu = VulkanDrivers.gpu(),
                 drivers = VulkanDrivers.installed(context),
                 driver = VulkanDrivers.selected(context),
@@ -263,6 +268,7 @@ internal fun SettingsRoute(onBack: () -> Unit) {
                     is SettingsChange.CompatFlags -> Settings.setCompatFlags(context, change.on)
                     is SettingsChange.ProtonLog -> Settings.setProtonLog(context, change.on)
                     is SettingsChange.ClientAllCores -> Settings.setClientAllCores(context, change.on)
+                    is SettingsChange.Flag -> change.flag.set(context, change.on)
                     is SettingsChange.KeepRunning -> Settings.setKeepRunning(context, change.on)
                     is SettingsChange.OnScreen -> Settings.setOnScreenController(context, change.on)
                     is SettingsChange.ShortcutTest -> SteamShortcuts.setTest(context, change.on)
@@ -425,6 +431,9 @@ internal fun SettingsScreen(state: SettingsState, onBack: () -> Unit, onChange: 
                 "Steam keeps its interface to some cores; this gives it all of them, for smoother menus.",
                 state.clientAllCores,
             ) { onChange(SettingsChange.ClientAllCores(it)) }
+        }
+        items(SettingFlag.entries.filter { it.section == "Steam" }) { flag ->
+            Toggle(flag.title, flag.detail, state.flags[flag] ?: flag.default) { onChange(SettingsChange.Flag(flag, it)) }
         }
 
         item { Section("Frontends") }
@@ -635,4 +644,25 @@ private fun exportMessage(count: Int?, dir: String?) = when {
     count == null -> "Could not write to ${dir ?: "the folder"}. Allow SteamOS Lite storage access, or pick another folder."
     count == 1 -> "1 game exported to $dir."
     else -> "$count games exported to $dir."
+}
+
+/** On/off settings that need nothing but a switch, grouped by the section they show in. */
+internal enum class SettingFlag(
+    val section: String,
+    val title: String,
+    val detail: String,
+    val default: Boolean,
+    val get: (Context) -> Boolean,
+    val set: (Context, Boolean) -> Unit,
+) {
+    CLIENT_TUNING(
+        "Steam", "Faster Steam interface",
+        "Lazy descriptors, threaded GL and no GL error checks for Steam's interface, which draws with OpenGL on Vulkan.",
+        true, Settings::clientTuning, Settings::setClientTuning,
+    ),
+    NO_XALIA(
+        "Steam", "Skip Proton's xalia helper",
+        "Xalia lets a pad drive some games' menus through accessibility; it starts with every game and can hang here.",
+        true, Settings::noXalia, Settings::setNoXalia,
+    ),
 }
