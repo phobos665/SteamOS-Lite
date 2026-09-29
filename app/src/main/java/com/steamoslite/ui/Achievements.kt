@@ -60,9 +60,12 @@ internal enum class AchievementDensity(
     val title: TextUnit,
     val description: TextUnit,
     val descriptionLines: Int,
+    /** Line heights; the theme's default leaves small text with lines far taller than it needs. */
+    val titleLine: TextUnit = TextUnit.Unspecified,
+    val descriptionLine: TextUnit = TextUnit.Unspecified,
 ) {
     Regular(48.dp, 10.dp, 12.dp, 15.sp, 13.sp, Int.MAX_VALUE),
-    Compact(32.dp, 7.dp, 10.dp, 13.sp, 12.sp, 1);
+    Compact(32.dp, 7.dp, 10.dp, 13.sp, 12.sp, 1, titleLine = 17.sp, descriptionLine = 15.sp);
 
     companion object {
         fun forHeight(height: Dp) = if (height < 520.dp) Compact else Regular
@@ -143,10 +146,11 @@ internal fun AchievementRow(
             Spacer(Modifier.width(density.gap))
             Column(Modifier.weight(1f)) {
                 Text(if (secret) "Hidden achievement" else a.name, color = if (a.unlocked) AppColors.text else AppColors.textSecondary,
-                    fontSize = density.title, maxLines = density.descriptionLines, overflow = TextOverflow.Ellipsis)
+                    fontSize = density.title, lineHeight = density.titleLine, maxLines = density.descriptionLines, overflow = TextOverflow.Ellipsis)
                 val desc = if (secret) "Details are shown once it is unlocked." else a.description
                 if (desc.isNotEmpty()) {
-                    Text(desc, color = AppColors.textMuted, fontSize = density.description, maxLines = density.descriptionLines,
+                    Text(desc, color = AppColors.textMuted, fontSize = density.description, lineHeight = density.descriptionLine,
+                        maxLines = density.descriptionLines,
                         overflow = TextOverflow.Ellipsis)
                 }
             }
