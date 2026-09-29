@@ -227,11 +227,24 @@ class Screenshots {
     @Test fun install_failed() =
         home(RuntimeState.Failed("The install did not finish. Check the connection and free space, then try again."))
 
-    @Test fun session_loading() = paparazzi.snapshot(
-        SessionActivity.loadingView(paparazzi.context).apply {
-            text = "Starting SteamOS…\n\ndownloading Steam: bins_linuxarm64 (3/9)"
-        },
-    )
+    @Test fun session_loading() = paparazzi.snapshot {
+        AppTheme(stillFrame = true) {
+            LoadingScreen(
+                LoadingState(stage = 1, stages = 3, step = "starting the Steam client", detail = "Downloading update (212,480 of 665,432 KB)...", tapToShow = true),
+                cover = null, backdrop = null,
+            )
+        }
+    }
+
+    @Test fun session_loading_game() = paparazzi.snapshot {
+        val cover = covers.getValue(games[0].first.appId)
+        AppTheme(stillFrame = true) {
+            LoadingScreen(
+                LoadingState(title = "Aurora Frontier", stage = 2, stages = 4, step = "Steam is starting the game"),
+                cover = cover, backdrop = cover,
+            )
+        }
+    }
 
     @Test fun session_quick_menu() = paparazzi.snapshot(
         android.widget.FrameLayout(paparazzi.context).apply {
