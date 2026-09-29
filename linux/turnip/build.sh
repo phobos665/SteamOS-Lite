@@ -7,12 +7,17 @@
 #
 # Variants follow StevenMX's Adreno-Tools-Drivers builds (the v26.x "R" line is Mesa main with
 # these changes), so the same driver can be had on both sides:
-#   a7xx  Mesa as it is.
+#   a7xx  Mesa as it is: Adreno 7xx (Snapdragon 8 Gen 1-3).
+#   a8xx  The gen8 fork of Turnip (whitebelyash/mesa-tu8, branch gen8): Adreno 8xx (8 Elite).
 #   a6xx  No cached-coherent memory (a6xx instability) and sysmem rendering forced (no GMEM).
+# Every variant gets the runtime's own KGSL patches (patches/), which the session needs: a DRM
+# device identity for gamescope's dma-buf feedback, and no crash when a game asks for calibrated
+# timestamps. A patch that no longer applies fails the build rather than shipping without it.
 #
 # Run on an aarch64 host. The zip holds libvulkan_freedreno.so and meta.json; the app writes the
 # ICD manifest on import, since library_path must be the path the driver ends up at.
 set -euo pipefail
+here=$(cd "$(dirname "$0")" && pwd)
 
 variant=${1:?variant}
 repo=${2:?mesa repo}
@@ -30,8 +35,12 @@ cd mesa
 commit=$(git rev-parse --short=10 HEAD)
 version=$(cat VERSION)
 
+for p in "$here"/patches/*.patch; do
+  patch -p1 --forward --fuzz=2 < "$p" || { echo "$(basename "$p") does not apply to $repo@$commit" >&2; exit 1; }
+done
+
 case $variant in
-  a7xx) ;;
+  a7xx|a8xx) ;;
   a6xx)
     # Found by what they contain, not by file name: Mesa moves these between releases. Each change
     # must land somewhere, or the variant would quietly be the a7xx build.
@@ -94,6 +103,7 @@ cat > "$pkg/meta.json" <<EOF
   "driverVersion": "$version-$commit",
   "vulkanVersion": "${vk:-unknown}",
   "variant": "$variant",
+  "gpus": "$(case $variant in a6xx) echo "Adreno 6xx" ;; a7xx) echo "Adreno 7xx (Snapdragon 8 Gen 1-3)" ;; a8xx) echo "Adreno 8xx (Snapdragon 8 Elite)" ;; esac)",
   "mesaRepo": "$repo",
   "mesaCommit": "$(git rev-parse HEAD)",
   "minGlibc": "$min_glibc",

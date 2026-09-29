@@ -28,6 +28,8 @@ import com.steamoslite.runtime.FexCore
 import com.steamoslite.runtime.GameSettings
 import com.steamoslite.runtime.GameSettingsStore
 import com.steamoslite.runtime.Settings
+import com.steamoslite.runtime.VulkanDrivers
+import com.steamoslite.runtime.Vkd3d
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -39,6 +41,13 @@ internal data class GameSettingsState(
     val fex: ComponentPick = ComponentPick(),
     val dxvk: ComponentPick = ComponentPick(),
     val globalPreset: Settings.FexPreset = Settings.FexPreset.INTERMEDIATE,
+    val globalLayer: Settings.CompatLayer = Settings.CompatLayer.ARM64,
+    val globalEmulator: Settings.X86Emulator = Settings.X86Emulator.BOX64,
+    val drivers: List<VulkanDrivers.Installed> = emptyList(),
+    val globalDriver: String = VulkanDrivers.RUNTIME,
+    val vkd3d: ComponentPick = ComponentPick(),
+    /** The global feature level, shader model and VKD3D_CONFIG. */
+    val globalVkd3d: Triple<String, String, String> = Triple("12_1", "6_0", Settings.AUTOMATIC),
 )
 
 /** One game's settings. [id] is the id Steam starts it with (see GameSettingsStore). */
@@ -50,7 +59,12 @@ internal fun GameSettingsRoute(id: String, title: String, onBack: () -> Unit) {
     var state by remember(id) { mutableStateOf(GameSettingsState(title)) }
     LaunchedEffect(id) {
         state = withContext(Dispatchers.IO) {
-            GameSettingsState(title, GameSettingsStore.get(context, id), FexCore.pick(context), Dxvk.pick(context), Settings.fexPreset(context))
+            GameSettingsState(
+                title, GameSettingsStore.get(context, id), FexCore.pick(context), Dxvk.pick(context),
+                Settings.fexPreset(context), Settings.compatLayer(context), Settings.x86Emulator(context),
+                VulkanDrivers.installed(context), VulkanDrivers.selected(context), Vkd3d.pick(context),
+                Triple(Settings.vkd3dFeatureLevel(context), Settings.vkd3dShaderModel(context), Settings.vkd3dConfig(context)),
+            )
         }
     }
     GameSettingsScreen(state, onBack) { changed ->
@@ -82,6 +96,25 @@ internal fun GameSettingsScreen(state: GameSettingsState, onBack: () -> Unit, on
         }
         item {
             Choice(
+                "Proton",
+                "ARM64 emulates only the game's own code; x86_64 emulates all of Wine too - slower, but it starts some " +
+                    "games ARM64 cannot. Changing it applies from the next SteamOS start.",
+                listOf<Settings.CompatLayer?>(null) + Settings.CompatLayer.entries, s.compatLayer,
+                label = { it?.label ?: "Global (${state.globalLayer.label})" },
+            ) { onChange(s.copy(compatLayer = it)) }
+        }
+        if ((s.compatLayer ?: state.globalLayer) == Settings.CompatLayer.X86_64) {
+            item {
+                Choice(
+                    "x86 emulator",
+                    "What runs Wine for this game. Try FEX if it misbehaves under Box64.",
+                    listOf<Settings.X86Emulator?>(null) + Settings.X86Emulator.entries, s.x86Emulator,
+                    label = { it?.label ?: "Global (${state.globalEmulator.label})" },
+                ) { onChange(s.copy(x86Emulator = it)) }
+            }
+        }
+        item {
+            Choice(
                 "FEX preset",
                 "How strictly x86 memory ordering is emulated. A stricter preset fixes hangs and crashes at some speed.",
                 listOf<Settings.FexPreset?>(null) + Settings.FexPreset.entries, s.fexPreset,
@@ -90,6 +123,24 @@ internal fun GameSettingsScreen(state: GameSettingsState, onBack: () -> Unit, on
         }
         item { VersionChoice(FexCore, state.fex, s.fexCore) { onChange(s.copy(fexCore = it)) } }
         item { VersionChoice(Dxvk, state.dxvk, s.dxvk) { onChange(s.copy(dxvk = it)) } }
+        item {
+            fun name(id: String) = if (id == VulkanDrivers.RUNTIME) "Built-in Turnip" else state.drivers.firstOrNull { it.id == id }?.name ?: id
+            Choice(
+                "Vulkan driver",
+                "The Turnip build this game draws with. Download more in Settings.",
+                listOf<String?>(null, VulkanDrivers.RUNTIME) + state.drivers.map { it.id }, s.vkDriver,
+                label = { it?.let(::name) ?: "Global (${name(state.globalDriver)})" },
+            ) { onChange(s.copy(vkDriver = it)) }
+        }
+        item { VersionChoice(Vkd3d, state.vkd3d, s.vkd3d) { onChange(s.copy(vkd3d = it)) } }
+        item {
+            Vkd3dChoices(
+                s.vkd3dFeatureLevel, s.vkd3dShaderModel, s.vkd3dConfig, state.globalVkd3d,
+                onLevel = { onChange(s.copy(vkd3dFeatureLevel = it)) },
+                onModel = { onChange(s.copy(vkd3dShaderModel = it)) },
+                onConfig = { onChange(s.copy(vkd3dConfig = it)) },
+            )
+        }
     }
 }
 
@@ -99,7 +150,11 @@ private fun VersionChoice(store: ComponentStore, pick: ComponentPick, selected: 
     fun name(version: String) = if (version == ComponentStore.PROTONS_OWN) "Proton's own" else version
     Choice(
         "${componentName(store)} version",
-        if (store == Dxvk) "Direct3D 8-11 on Vulkan." else "The x86 emulator Proton runs the game's code with.",
+        when (store) {
+            Dxvk -> "Direct3D 8-11 on Vulkan."
+            Vkd3d -> "Direct3D 12 on Vulkan."
+            else -> "The x86 emulator Proton runs the game's code with."
+        },
         listOf<String?>(null, ComponentStore.PROTONS_OWN) + pick.versions.reversed(), selected,
         label = { it?.let(::name) ?: "Global (${name(pick.selected)})" },
         onSelect = onSelect,

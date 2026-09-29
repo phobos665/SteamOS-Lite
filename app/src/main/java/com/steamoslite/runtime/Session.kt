@@ -121,6 +121,9 @@ class Session(
         // Only the chosen versions are unpacked before the session starts (the first start after
         // an install would otherwise unpack ~220 MB first); the rest follow in the background and
         // are needed no sooner than a game launch that names one.
+        // Which Proton each title runs on, and what runs an x86_64 one.
+        GameSettingsStore.writeCompatLayers(context)
+        guest += "BL_X86_EMU=" + Settings.x86Emulator(context).id
         // Versions a game's own settings name are needed as early as the global one.
         val games = GameSettingsStore.all(context).values
         guest += "BL_FEXCORE_ROOT=" + FexCore.prepare(context, (games.mapNotNull { it.fexCore } + FexCore.selected(context)).distinct()).path
@@ -129,10 +132,14 @@ class Session(
         // DXVK into the prefix at every start). Per game: BL_DXVK=2.6.1-gplasync %command%.
         guest += "BL_DXVK_ROOT=" + Dxvk.prepare(context, (games.mapNotNull { it.dxvk } + Dxvk.selected(context)).distinct()).path
         guest += "BL_DXVK=" + Dxvk.selected(context)
-        mark("chosen FEXCore and DXVK ready")
+        guest += "BL_VKD3D_ROOT=" + Vkd3d.prepare(context, (games.mapNotNull { it.vkd3d } + Vkd3d.selected(context)).distinct()).path
+        guest += "BL_VKD3D=" + Vkd3d.selected(context)
+        Settings.gameEnv(context).forEach { (k, v) -> guest += "$k=$v" }
+        mark("chosen FEXCore, DXVK and VKD3D-Proton ready")
         // 0 starts the client without its update check and file verification.
         guest += "BL_STEAM_UPDATES=" + if (Settings.steamUpdates(context)) "1" else "0"
         LinuxRuntime.vulkanIcd(context)?.let { guest += "VK_ICD_FILENAMES=" + it.path }
+        if (VulkanDrivers.selected(context) != VulkanDrivers.RUNTIME) VulkanDrivers.selectedIcd(context)?.let { guest += "BL_VK_DRIVER=" + it.path }
         FakeInputWriter.getRingEnv(fakeInputDir).takeIf { it.isNotEmpty() }?.let { guest += "FAKE_EVDEV_MEMFD_PATHS=$it" }
         guest += LinuxRuntime.SESSION_SCRIPT
         guest += LinuxRuntime.MODE_STEAM
@@ -158,6 +165,7 @@ class Session(
             try {
                 FexCore.prepare(context)
                 Dxvk.prepare(context)
+                Vkd3d.prepare(context)
             } catch (e: Exception) {
                 Log.w(TAG, "could not unpack the bundled FEXCore/DXVK versions", e)
             }
@@ -290,6 +298,7 @@ class Session(
         private val SESSION_FILES = listOf(
             "libblsession.so" to "usr/local/lib/libblsession.so",
             "libfakeinput.so" to "usr/local/lib/libfakeinput.so",
+            "box64" to "usr/local/bin/box64",
         ) + listOf(
             "session", "steam-install", "steam-compat", "steam-library",
             "seed-redists", "netmanager", "proton-extra", "steam-shortcuts",

@@ -8,3 +8,4 @@ local.properties
 # Built by CI from linux/ (glibc aarch64); never committed.
 app/src/main/assets/linuxfs/*.so
 __pycache__/
+app/src/main/assets/linuxfs/box64

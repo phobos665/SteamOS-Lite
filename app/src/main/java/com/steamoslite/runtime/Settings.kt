@@ -14,10 +14,16 @@ object Settings {
     private const val REFRESH = "refreshHz"
     private const val FPS_LIMIT = "fpsLimit"
     private const val FEX_PRESET = "fexPreset"
+    private const val COMPAT_LAYER = "compatLayer"
+    private const val X86_EMULATOR = "x86Emulator"
     private const val STEAM_UPDATES = "steamUpdates"
     private const val PROTON_LOG = "protonLog"
     private const val CLIENT_ALL_CORES = "clientAllCores"
     private const val KEEP_RUNNING = "keepRunning"
+    private const val VKD3D_FEATURE_LEVEL = "vkd3dFeatureLevel"
+    private const val VKD3D_SHADER_MODEL = "vkd3dShaderModel"
+    private const val VKD3D_CONFIG = "vkd3dConfig"
+    private const val COMPAT_FLAGS = "compatFlags"
     const val ON_SCREEN = "onScreenController"
 
     /** gamescope's output: what Steam and every game render at, scaled to the screen. */
@@ -84,6 +90,28 @@ object Settings {
 
     fun setFexPreset(context: Context, preset: FexPreset) = put(context) { putString(FEX_PRESET, preset.name) }
 
+    /** Which Proton a Windows game runs on: the native ARM64 one, or an x86_64 one under an emulator. */
+    enum class CompatLayer(val id: String, val label: String) {
+        ARM64("arm64", "Proton ARM64"),
+        X86_64("x86_64", "Proton x86_64"),
+    }
+
+    /** What runs an x86_64 Proton's Wine; the ARM64 Proton uses FEXCore instead. */
+    enum class X86Emulator(val id: String, val label: String) {
+        BOX64("box64", "Box64"),
+        FEX("fex", "FEX"),
+    }
+
+    fun compatLayer(context: Context): CompatLayer =
+        runCatching { CompatLayer.valueOf(prefs(context).getString(COMPAT_LAYER, null)!!) }.getOrDefault(CompatLayer.ARM64)
+
+    fun setCompatLayer(context: Context, layer: CompatLayer) = put(context) { putString(COMPAT_LAYER, layer.name) }
+
+    fun x86Emulator(context: Context): X86Emulator =
+        runCatching { X86Emulator.valueOf(prefs(context).getString(X86_EMULATOR, null)!!) }.getOrDefault(X86Emulator.BOX64)
+
+    fun setX86Emulator(context: Context, emulator: X86Emulator) = put(context) { putString(X86_EMULATOR, emulator.name) }
+
     /** Whether the Steam client checks for its own updates (and verifies its files) at every start. */
     fun steamUpdates(context: Context) = prefs(context).getBoolean(STEAM_UPDATES, true)
 
@@ -103,6 +131,49 @@ object Settings {
     fun keepRunning(context: Context) = prefs(context).getBoolean(KEEP_RUNNING, true)
 
     fun setKeepRunning(context: Context, on: Boolean) = put(context) { putBoolean(KEEP_RUNNING, on) }
+
+    /** An empty value in the VKD3D-Proton choices leaves it to VKD3D-Proton. */
+    const val AUTOMATIC = ""
+    val VKD3D_FEATURE_LEVELS = listOf(AUTOMATIC, "12_2", "12_1", "12_0", "11_1", "11_0")
+    val VKD3D_SHADER_MODELS = listOf(AUTOMATIC, "6_6", "6_5", "6_0", "5_1")
+    /** VKD3D_CONFIG: no ray tracing, and no textures uploaded straight into video memory. */
+    val VKD3D_CONFIGS = listOf(AUTOMATIC, "nodxr", "nodxr,no_upload_hvv")
+
+    /** The Direct3D 12 feature level games are told the GPU has. */
+    fun vkd3dFeatureLevel(context: Context) = prefs(context).getString(VKD3D_FEATURE_LEVEL, "12_1")!!
+
+    fun setVkd3dFeatureLevel(context: Context, level: String) = put(context) { putString(VKD3D_FEATURE_LEVEL, level) }
+
+    /** The highest shader model games are offered: newer ones reach driver features that crash on Adreno. */
+    fun vkd3dShaderModel(context: Context) = prefs(context).getString(VKD3D_SHADER_MODEL, "6_0")!!
+
+    fun setVkd3dShaderModel(context: Context, model: String) = put(context) { putString(VKD3D_SHADER_MODEL, model) }
+
+    fun vkd3dConfig(context: Context) = prefs(context).getString(VKD3D_CONFIG, AUTOMATIC)!!
+
+    fun setVkd3dConfig(context: Context, config: String) = put(context) { putString(VKD3D_CONFIG, config) }
+
+    /** The environment Android Proton builds run games with to avoid known crashes. */
+    val COMPAT_ENV = mapOf(
+        "TU_DEBUG" to "noconform",
+        "WINEESYNC" to "1",
+        "MESA_SHADER_CACHE_DISABLE" to "false",
+        "MESA_SHADER_CACHE_MAX_SIZE" to "512MB",
+        "DXVK_ASYNC" to "1",
+        "DXVK_GPLASYNCCACHE" to "1",
+    )
+
+    fun compatFlags(context: Context) = prefs(context).getBoolean(COMPAT_FLAGS, true)
+
+    fun setCompatFlags(context: Context, on: Boolean) = put(context) { putBoolean(COMPAT_FLAGS, on) }
+
+    /** Every VKD3D-Proton and compatibility variable the session sets for games, from the settings above. */
+    fun gameEnv(context: Context): Map<String, String> = buildMap {
+        if (compatFlags(context)) putAll(COMPAT_ENV)
+        vkd3dFeatureLevel(context).takeIf { it.isNotEmpty() }?.let { put("VKD3D_FEATURE_LEVEL", it) }
+        vkd3dShaderModel(context).takeIf { it.isNotEmpty() }?.let { put("VKD3D_SHADER_MODEL", it) }
+        vkd3dConfig(context).takeIf { it.isNotEmpty() }?.let { put("VKD3D_CONFIG", it) }
+    }
 
     /** The touch gamepad shown when a session starts (the quick menu toggles it, and saves that). */
     fun onScreenController(context: Context) = prefs(context).getBoolean(ON_SCREEN, false)

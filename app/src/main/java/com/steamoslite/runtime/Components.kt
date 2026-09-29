@@ -127,21 +127,21 @@ object FexCore : ComponentStore("fexcore") {
 }
 
 /**
- * DXVK, Direct3D 8-11 on Vulkan. Proton copies its own DXVK into a game's prefix at every start, so
- * a swap in the prefix would not survive; the launchers instead run Proton from a mirror of its
- * tree whose DXVK directory holds the chosen version, and Proton installs that one itself.
+ * A translation layer Proton copies into a game's prefix at every start (DXVK, VKD3D-Proton), so a
+ * swap in the prefix would not survive; the launchers instead run Proton from a mirror of its tree
+ * whose directory for the layer holds the chosen version, and Proton installs that one itself.
  * Packages keep 64-bit DLLs in system32/ and 32-bit ones in syswow64/, the layout kept here.
  */
-object Dxvk : ComponentStore("dxvk") {
-    private val ARCHES = listOf("system32", "syswow64")
+abstract class TranslationLayer(kind: String, private val probe: String) : ComponentStore(kind) {
+    private val arches = listOf("system32", "syswow64")
 
-    override fun isComplete(dir: File) = File(dir, "system32/d3d11.dll").isFile
+    override fun isComplete(dir: File) = File(dir, "system32/$probe").isFile
 
     override fun keep(unpacked: File, dir: File) {
         val base = unpacked.walkTopDown()
-            .firstOrNull { it.isDirectory && it.name == "system32" && File(it, "d3d11.dll").isFile }?.parentFile
-        requireNotNull(base) { "not a DXVK package: no system32/d3d11.dll" }
-        for (arch in ARCHES) {
+            .firstOrNull { it.isDirectory && it.name == "system32" && File(it, probe).isFile }?.parentFile
+        requireNotNull(base) { "not a $kind package: no system32/$probe" }
+        for (arch in arches) {
             val from = File(base, arch)
             if (!from.isDirectory) continue
             val to = File(dir, arch).apply { mkdirs() }
@@ -149,3 +149,9 @@ object Dxvk : ComponentStore("dxvk") {
         }
     }
 }
+
+/** DXVK, Direct3D 8-11 on Vulkan. */
+object Dxvk : TranslationLayer("dxvk", "d3d11.dll")
+
+/** VKD3D-Proton, Direct3D 12 on Vulkan. */
+object Vkd3d : TranslationLayer("vkd3d", "d3d12.dll")

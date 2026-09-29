@@ -11,6 +11,7 @@ permissions:
 env:
   ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
   NDK_VERSION: 27.2.12479018
+  BOX64_VERSION: v0.4.4
 
 jobs:
   build:
@@ -64,6 +65,35 @@ jobs:
           done
           ls -l "$D"
 
+      # Box64 runs x86_64 Proton for the games set to it: a glibc aarch64 build like the preloads,
+      # staged into the runtime at every session start. Cached by version; a build takes minutes.
+      - name: Cache Box64
+        id: box64-cache
+        uses: actions/cache@v4
+        with:
+          path: box64-out
+          key: box64-${{ env.BOX64_VERSION }}-generic-box32
+
+      - name: Build Box64
+        if: steps.box64-cache.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          git clone -q --depth 1 -b "$BOX64_VERSION" https://github.com/ptitSeb/box64.git /tmp/box64
+          cmake -S /tmp/box64 -B /tmp/box64/build -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+            -DCMAKE_SYSTEM_NAME=Linux -DCMAKE_SYSTEM_PROCESSOR=aarch64 \
+            -DCMAKE_C_COMPILER=aarch64-linux-gnu-gcc -DCMAKE_ASM_COMPILER=aarch64-linux-gnu-gcc \
+            -DARM_DYNAREC=ON -DBOX32=ON -DNOGIT=ON
+          cmake --build /tmp/box64/build -j"$(nproc)" --target box64
+          mkdir -p box64-out
+          aarch64-linux-gnu-strip -o box64-out/box64 /tmp/box64/build/box64
+
+      - name: Stage Box64
+        run: |
+          install -m 755 box64-out/box64 app/src/main/assets/linuxfs/box64
+          file app/src/main/assets/linuxfs/box64 | grep -q "ARM aarch64" \
+            || { echo "::error::box64 is not an aarch64 binary"; exit 1; }
+          ls -l app/src/main/assets/linuxfs/box64
+
       - name: Build
         run: ./gradlew assembleDebug --no-daemon
 
@@ -81,7 +111,7 @@ jobs:
                    lib/arm64-v8a/libmain_hook.so lib/arm64-v8a/libhook_impl.so \
                    lib/arm64-v8a/libwayland-server.so lib/arm64-v8a/libffi.so \
                    lib/arm64-v8a/libpulseaudio.so lib/arm64-v8a/libpulsecore-13.0.so \
-                   assets/linuxfs/libblsession.so assets/linuxfs/libfakeinput.so \
+                   assets/linuxfs/libblsession.so assets/linuxfs/libfakeinput.so assets/linuxfs/box64 \
                    assets/linuxfs/usr/local/bin/bannerlator-session \
                    assets/turnip.tzst assets/pulseaudio.tzst assets/wayland/keymap.xkb; do
             grep -q " $f\$" contents.txt || { echo "::error::$f is missing from the APK"; exit 1; }
