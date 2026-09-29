@@ -38,6 +38,7 @@ import com.steamoslite.frontend.FrontendExport
 import com.steamoslite.runtime.ComponentStore
 import com.steamoslite.runtime.Dxvk
 import com.steamoslite.runtime.FexCore
+import com.steamoslite.runtime.Nightlies
 import com.steamoslite.runtime.Protons
 import com.steamoslite.runtime.Settings
 import com.steamoslite.runtime.SteamShortcuts
@@ -79,6 +80,10 @@ internal data class SettingsState(
     val clientAllCores: Boolean = true,
     val keepRunning: Boolean = true,
     val onScreen: Boolean = false,
+    /** Nightlies builds per component, once asked for (null until then). */
+    val nightlies: Map<ComponentStore, List<Nightlies.Item>> = emptyMap(),
+    /** The component package being downloaded and how far it is. */
+    val componentDownload: Pair<String, Float>? = null,
     val flags: Map<SettingFlag, Boolean> = SettingFlag.entries.associateWith { it.default },
     val gpu: VulkanDrivers.Gpu? = null,
     val drivers: List<VulkanDrivers.Installed> = emptyList(),
@@ -111,6 +116,8 @@ internal sealed interface SettingsChange {
     data class ProtonLog(val on: Boolean) : SettingsChange
     data class ClientAllCores(val on: Boolean) : SettingsChange
     data class Flag(val flag: SettingFlag, val on: Boolean) : SettingsChange
+    data class LoadNightlies(val store: ComponentStore) : SettingsChange
+    data class NightlyInstall(val store: ComponentStore, val item: Nightlies.Item) : SettingsChange
     data class KeepRunning(val on: Boolean) : SettingsChange
     data class OnScreen(val on: Boolean) : SettingsChange
     data class Driver(val id: String) : SettingsChange
@@ -226,6 +233,39 @@ internal fun SettingsRoute(onBack: () -> Unit) {
             }
             return@SettingsScreen
         }
+        if (change is SettingsChange.LoadNightlies) {
+            scope.launch {
+                val items = withContext(Dispatchers.IO) { Nightlies.catalog(change.store) }
+                state = state.copy(
+                    nightlies = state.nightlies + (change.store to items),
+                    message = if (items.isEmpty()) "Could not reach the Nightlies releases; try again later." else null,
+                )
+            }
+            return@SettingsScreen
+        }
+        if (change is SettingsChange.NightlyInstall) {
+            if (state.componentDownload != null) return@SettingsScreen
+            val item = change.item
+            state = state.copy(componentDownload = item.file to 0f, message = null)
+            scope.launch {
+                val result = withContext(Dispatchers.IO) {
+                    runCatching {
+                        change.store.download(context, item) { f ->
+                            scope.launch { if (state.componentDownload?.first == item.file) state = state.copy(componentDownload = item.file to f) }
+                        }
+                    }
+                }
+                state = state.copy(
+                    componentDownload = null,
+                    message = result.fold(
+                        { componentLabel(change.store, it) + " downloaded. Choose it above to use it." },
+                        { "Could not install ${item.file}: ${it.message}" },
+                    ),
+                )
+                reload()
+            }
+            return@SettingsScreen
+        }
         if (change is SettingsChange.DriverInstall) {
             if (state.driverDownload != null) return@SettingsScreen
             val driver = change.driver
@@ -274,7 +314,7 @@ internal fun SettingsRoute(onBack: () -> Unit) {
                     is SettingsChange.ShortcutTest -> SteamShortcuts.setTest(context, change.on)
                     is SettingsChange.Driver -> VulkanDrivers.select(context, change.id)
                     is SettingsChange.DriverRemove -> VulkanDrivers.remove(context, change.id)
-                    is SettingsChange.Import, is SettingsChange.DriverInstall, SettingsChange.FrontendPick, SettingsChange.FrontendExportNow,
+                    is SettingsChange.Import, is SettingsChange.DriverInstall, is SettingsChange.LoadNightlies, is SettingsChange.NightlyInstall, SettingsChange.FrontendPick, SettingsChange.FrontendExportNow,
                     is SettingsChange.FrontendDir -> {}
                 }
             }
@@ -362,15 +402,15 @@ internal fun SettingsScreen(state: SettingsState, onBack: () -> Unit, onChange: 
                 FexCore, state.fex,
                 "The x86 emulator for games' Windows code. Swapped into each game's prefix from its " +
                     "second start. For one game: BL_FEXCORE=2605 %command%.",
-                onChange,
+                state, onChange,
             )
         }
         item {
             ComponentChoice(
                 Dxvk, state.dxvk,
-                "Direct3D 8-11 on Vulkan. The bundled versions are GameNative's x86-64 builds, which run " +
-                    "under FEXCore: try them when a game draws wrong. For one game: BL_DXVK=2.6.1-gplasync %command%.",
-                onChange,
+                "Direct3D 8-11 on Vulkan. The bundled versions are x86-64 builds that run under FEXCore; the " +
+                    "ARM64EC nightly builds run natively. For one game: BL_DXVK=2.6.1-gplasync %command%.",
+                state, onChange,
             )
         }
 
@@ -378,7 +418,7 @@ internal fun SettingsScreen(state: SettingsState, onBack: () -> Unit, onChange: 
             Toggle(
                 "Crash-safety flags",
                 "The settings Android Proton builds run games with to avoid known crashes: Turnip's " +
-                    "noconform mode, esync, a larger shader cache and DXVK's async compilation.",
+                    "noconform mode, esync, a larger shader cache and DXVK's async compilation (async builds only).",
                 state.compatFlags,
             ) { onChange(SettingsChange.CompatFlags(it)) }
         }
@@ -389,7 +429,7 @@ internal fun SettingsScreen(state: SettingsState, onBack: () -> Unit, onChange: 
                 Vkd3d, state.vkd3d,
                 "VKD3D-Proton, Direct3D 12 on Vulkan. The bundled versions are x86-64 builds that run under " +
                     "FEXCore; try one when a DX12 game crashes or draws wrong.",
-                onChange,
+                state, onChange,
             )
         }
         item {
@@ -585,14 +625,28 @@ private fun Toggle(title: String, detail: String, on: Boolean, onChange: (Boolea
 
 /** FEXCore or DXVK: Proton's own or a version, newest first, plus import and removing imports. */
 @Composable
-private fun ComponentChoice(store: ComponentStore, pick: ComponentPick, detail: String, onChange: (SettingsChange) -> Unit) {
+private fun ComponentChoice(store: ComponentStore, pick: ComponentPick, detail: String, state: SettingsState, onChange: (SettingsChange) -> Unit) {
     val name = componentName(store)
+    val nightlies = state.nightlies[store]
     Choice(
         "$name version", detail,
         listOf(ComponentStore.PROTONS_OWN) + pick.versions.reversed(), pick.selected,
         label = { if (it == ComponentStore.PROTONS_OWN) "Proton's own" else it + if (it in pick.imported) " (imported)" else "" },
         extra = {
             SecondaryButton(onClick = { onChange(SettingsChange.Import(store)) }) { Text("Import…") }
+            if (nightlies == null) {
+                SecondaryButton(onClick = { onChange(SettingsChange.LoadNightlies(store)) }) { Text("Nightly builds…") }
+            } else {
+                for (item in nightlies) {
+                    val progress = state.componentDownload?.takeIf { it.first == item.file }?.second
+                    SecondaryButton(onClick = { onChange(SettingsChange.NightlyInstall(store, item)) }) {
+                        Text(
+                            if (progress != null) "Downloading ${(progress * 100).toInt()}%"
+                            else "Get " + item.file.removeSuffix(".wcp") + if (item.arm64ec) " (ARM64EC)" else "",
+                        )
+                    }
+                }
+            }
             for (version in pick.imported) {
                 if (version != pick.selected) {
                     SecondaryButton(onClick = { onChange(SettingsChange.Remove(store, version)) }) { Text("Remove $version") }

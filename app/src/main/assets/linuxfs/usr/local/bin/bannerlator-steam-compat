@@ -227,7 +227,11 @@ bl_layer_pkg() {
   # The chosen package of one translation layer, or nothing for Proton's own.
   # <wanted version> <package root> <probe dll> <Proton's directory for it> <name>
   [ -n "$1" ] && [ "$1" != proton ] && [ -n "$2" ] || return 0
-  if [ ! -f "$2/$1/system32/$3" ]; then
+  found=""
+  for probe in "$2/$1"/*/"$3"; do
+    case ${probe%/*} in */syswow64|*/i386-*) ;; *) [ -f "$probe" ] && found=1 ;; esac
+  done
+  if [ -z "$found" ]; then
     echo "bannerlator-proton: $5 $1 is not installed in the app; using Proton's own" >&2
   elif [ ! -d "$4" ]; then
     echo "bannerlator-proton: this Proton keeps no $5 in ${4#$base/}; using its own" >&2
@@ -243,13 +247,18 @@ bl_layer_fill() {
     return 0
   fi
   # Proton's own layout, one directory per architecture, each DLL taken from the package where it
-  # has one (64-bit from system32/, 32-bit from syswow64/) and from Proton otherwise, so Proton
-  # finds every file it copies.
+  # has one and from Proton otherwise, so Proton finds every file it copies. A package in Proton's
+  # layout matches by folder; one in system32/syswow64 form gives 64-bit and 32-bit DLLs.
   mkdir -p "$2"
   for a in "$1"/*; do
     n=${a##*/}
     if [ ! -d "$a" ]; then ln -s "$a" "$2/$n"; continue; fi
-    case "$n" in i386-*) from="$3/syswow64" ;; *) from="$3/system32" ;; esac
+    case "$n" in
+      i386-*) cands="$n syswow64" ;;
+      *) cands="$n aarch64-windows arm64ec-windows x86_64-windows system32" ;;
+    esac
+    from=""
+    for c in $cands; do [ -d "$3/$c" ] && { from="$3/$c"; break; }; done
     mkdir -p "$2/$n"
     for f in "$a"/*; do
       if [ -f "$from/${f##*/}" ]; then ln -s "$from/${f##*/}" "$2/$n/"; else ln -s "$f" "$2/$n/"; fi
@@ -262,19 +271,38 @@ bl_dxvk() {
   wine="$base/files/lib/wine"
   dxvk=$(bl_layer_pkg "${BL_DXVK:-}" "${BL_DXVK_ROOT:-}" d3d11.dll "$wine/dxvk" DXVK)
   vkd3d=$(bl_layer_pkg "${BL_VKD3D:-}" "${BL_VKD3D_ROOT:-}" d3d12.dll "$wine/vkd3d-proton" VKD3D-Proton)
-  [ -n "$dxvk$vkd3d" ] || return 0
+  # FEX 2607 and newer keep a unix half beside Wine; a DLL swapped into the prefix needs its own.
+  fexunix=""
+  if [ -n "${BL_FEXCORE:-}" ] && [ "$BL_FEXCORE" != proton ] && [ -f "${BL_FEXCORE_ROOT:-}/$BL_FEXCORE/libarm64ecfex.so" ] \
+      && [ -d "$wine/aarch64-unix" ]; then
+    fexunix="$BL_FEXCORE_ROOT/$BL_FEXCORE"
+  fi
+  [ -n "$dxvk$vkd3d$fexunix" ] || return 0
   resolved=$(cd "$base" && pwd -P)
   key="${resolved##*/}-$(printf '%s' "$resolved" | cksum | cut -d' ' -f1)"
   shadow="${XDG_DATA_HOME:-$HOME/.local/share}/bannerlator/proton-mirror/$key"
   bl_mirror "$base" "$shadow" files &&
     bl_mirror "$base/files" "$shadow/files" lib &&
     bl_mirror "$base/files/lib" "$shadow/files/lib" wine &&
-    bl_mirror "$wine" "$shadow/files/lib/wine" dxvk vkd3d-proton || {
+    bl_mirror "$wine" "$shadow/files/lib/wine" dxvk vkd3d-proton aarch64-unix || {
       echo "bannerlator-proton: could not mirror $base; using Proton's own DXVK and VKD3D-Proton" >&2
       return 0
     }
   [ -d "$wine/dxvk" ] && bl_layer_fill "$wine/dxvk" "$shadow/files/lib/wine/dxvk" "$dxvk"
   [ -d "$wine/vkd3d-proton" ] && bl_layer_fill "$wine/vkd3d-proton" "$shadow/files/lib/wine/vkd3d-proton" "$vkd3d"
+  if [ -d "$wine/aarch64-unix" ]; then
+    u="$shadow/files/lib/wine/aarch64-unix"
+    rm -rf "$u"
+    if [ -z "$fexunix" ]; then
+      ln -sfn "$wine/aarch64-unix" "$u"
+    else
+      mkdir -p "$u"
+      for f in "$wine/aarch64-unix"/*; do
+        n=${f##*/}
+        if [ -f "$fexunix/$n" ]; then ln -s "$fexunix/$n" "$u/$n"; else ln -s "$f" "$u/$n"; fi
+      done
+    fi
+  fi
   BL_PROTON_BASE=$shadow
   dxvk=${dxvk##*/} vkd3d=${vkd3d##*/}
   echo "bannerlator-proton: DXVK ${dxvk:-proton}, VKD3D-Proton ${vkd3d:-proton} (Proton run from $shadow)" >&2
