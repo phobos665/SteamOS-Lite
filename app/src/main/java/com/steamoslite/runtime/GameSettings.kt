@@ -15,6 +15,8 @@ data class GameSettings(
     val fexPreset: Settings.FexPreset? = null,
     val compatLayer: Settings.CompatLayer? = null,
     val x86Emulator: Settings.X86Emulator? = null,
+    /** A Vulkan driver's id, or [VulkanDrivers.RUNTIME] for the runtime's own. */
+    val vkDriver: String? = null,
 ) {
     val isDefault get() = this == GameSettings()
 
@@ -24,14 +26,19 @@ data class GameSettings(
         fexPreset?.let { put("fexPreset", it.name) }
         compatLayer?.let { put("compatLayer", it.name) }
         x86Emulator?.let { put("x86Emulator", it.name) }
+        vkDriver?.let { put("vkDriver", it) }
     }
 
     /** What the Proton launchers read when the game starts: the same variables the session sets globally. */
-    fun toEnv(): String = buildString {
+    fun toEnv(icd: (String) -> File?): String = buildString {
         fexCore?.let { append("BL_FEXCORE=").append(it.ifEmpty { "proton" }).append('\n') }
         dxvk?.let { append("BL_DXVK=").append(it.ifEmpty { "proton" }).append('\n') }
         fexPreset?.env?.forEach { (k, v) -> append(k).append('=').append(v).append('\n') }
         x86Emulator?.let { append("BL_X86_EMU=").append(it.id).append('\n') }
+        vkDriver?.let(icd)?.let {
+            append("VK_DRIVER_FILES=").append(it.path).append('\n')
+            append("VK_ICD_FILENAMES=").append(it.path).append('\n')
+        }
     }
 
     companion object {
@@ -44,6 +51,7 @@ data class GameSettings(
                 ?.let { runCatching { Settings.CompatLayer.valueOf(it) }.getOrNull() },
             x86Emulator = o.optString("x86Emulator").takeIf { it.isNotEmpty() }
                 ?.let { runCatching { Settings.X86Emulator.valueOf(it) }.getOrNull() },
+            vkDriver = o.optString("vkDriver").takeIf { o.has("vkDriver") },
         )
     }
 }
@@ -73,7 +81,7 @@ object GameSettingsStore {
         }
         FileUtils.writeString(json, settings.toJson().toString())
         env.parentFile?.mkdirs()
-        FileUtils.writeString(env, settings.toEnv())
+        FileUtils.writeString(env, settings.toEnv { VulkanDrivers.icd(context, it) })
     }
 
     /**

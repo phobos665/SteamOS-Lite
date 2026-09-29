@@ -39,6 +39,7 @@ import com.steamoslite.runtime.FexCore
 import com.steamoslite.runtime.Protons
 import com.steamoslite.runtime.Settings
 import com.steamoslite.runtime.SteamShortcuts
+import com.steamoslite.runtime.VulkanDrivers
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -70,6 +71,12 @@ internal data class SettingsState(
     val clientAllCores: Boolean = true,
     val keepRunning: Boolean = true,
     val onScreen: Boolean = false,
+    val gpu: VulkanDrivers.Gpu? = null,
+    val drivers: List<VulkanDrivers.Installed> = emptyList(),
+    val driver: String = VulkanDrivers.RUNTIME,
+    val driverCatalog: List<VulkanDrivers.CatalogDriver> = emptyList(),
+    /** The driver being downloaded and how far it is. */
+    val driverDownload: Pair<String, Float>? = null,
     /** The frontend shortcut folder, or null when exporting is off. */
     val frontendDir: String? = null,
     val shortcutTest: Boolean = false,
@@ -92,6 +99,9 @@ internal sealed interface SettingsChange {
     data class ClientAllCores(val on: Boolean) : SettingsChange
     data class KeepRunning(val on: Boolean) : SettingsChange
     data class OnScreen(val on: Boolean) : SettingsChange
+    data class Driver(val id: String) : SettingsChange
+    data class DriverInstall(val driver: VulkanDrivers.CatalogDriver) : SettingsChange
+    data class DriverRemove(val id: String) : SettingsChange
     /** Opens the folder picker for frontend shortcuts. */
     data object FrontendPick : SettingsChange
     data class FrontendDir(val path: String?) : SettingsChange
@@ -127,10 +137,16 @@ internal fun SettingsRoute(onBack: () -> Unit) {
                 onScreen = Settings.onScreenController(context),
                 frontendDir = FrontendExport.dir(context)?.path,
                 shortcutTest = SteamShortcuts.testEnabled(context),
+                gpu = VulkanDrivers.gpu(),
+                drivers = VulkanDrivers.installed(context),
+                driver = VulkanDrivers.selected(context),
             )
         }
     }
-    LaunchedEffect(Unit) { reload() }
+    LaunchedEffect(Unit) {
+        reload()
+        state = state.copy(driverCatalog = withContext(Dispatchers.IO) { VulkanDrivers.catalog() })
+    }
 
     // The component a package is being picked for; the picker's result has no room for it.
     var importingInto by remember { mutableStateOf<ComponentStore>(FexCore) }
@@ -190,6 +206,25 @@ internal fun SettingsRoute(onBack: () -> Unit) {
             }
             return@SettingsScreen
         }
+        if (change is SettingsChange.DriverInstall) {
+            if (state.driverDownload != null) return@SettingsScreen
+            val driver = change.driver
+            state = state.copy(driverDownload = driver.id to 0f, message = null)
+            scope.launch {
+                val result = withContext(Dispatchers.IO) {
+                    runCatching {
+                        VulkanDrivers.install(context, driver) { f -> scope.launch { if (state.driverDownload?.first == driver.id) state = state.copy(driverDownload = driver.id to f) } }
+                        VulkanDrivers.select(context, driver.id)
+                    }
+                }
+                state = state.copy(
+                    driverDownload = null,
+                    message = result.fold({ "${driverLabel(driver)} installed and chosen." }, { "Could not install the driver: ${it.message}" }),
+                )
+                reload()
+            }
+            return@SettingsScreen
+        }
         if (change is SettingsChange.Import) {
             importingInto = change.store
             picker.launch(arrayOf("application/*", "*/*"))
@@ -212,7 +247,9 @@ internal fun SettingsRoute(onBack: () -> Unit) {
                     is SettingsChange.KeepRunning -> Settings.setKeepRunning(context, change.on)
                     is SettingsChange.OnScreen -> Settings.setOnScreenController(context, change.on)
                     is SettingsChange.ShortcutTest -> SteamShortcuts.setTest(context, change.on)
-                    is SettingsChange.Import, SettingsChange.FrontendPick, SettingsChange.FrontendExportNow,
+                    is SettingsChange.Driver -> VulkanDrivers.select(context, change.id)
+                    is SettingsChange.DriverRemove -> VulkanDrivers.remove(context, change.id)
+                    is SettingsChange.Import, is SettingsChange.DriverInstall, SettingsChange.FrontendPick, SettingsChange.FrontendExportNow,
                     is SettingsChange.FrontendDir -> {}
                 }
             }
@@ -265,6 +302,9 @@ internal fun SettingsScreen(state: SettingsState, onBack: () -> Unit, onChange: 
                 label = { if (it == 0) "Off" else "$it fps" },
             ) { onChange(SettingsChange.FpsLimit(it)) }
         }
+
+        item { Section("Graphics") }
+        item { DriverChoice(state, onChange) }
 
         item { Section("Emulation") }
         item {
@@ -459,6 +499,44 @@ private fun ComponentChoice(store: ComponentStore, pick: ComponentPick, detail: 
         },
     ) { onChange(SettingsChange.Component(store, it)) }
 }
+
+/**
+ * The Vulkan driver for the whole session: the runtime's Turnip or a downloaded build, with the
+ * builds for this device's GPU offered first.
+ */
+@Composable
+internal fun DriverChoice(state: SettingsState, onChange: (SettingsChange) -> Unit) {
+    val family = state.gpu?.family
+    val installed = state.drivers.map { it.id }.toSet()
+    val offered = state.driverCatalog.filter { it.id !in installed }.sortedBy { if (it.family == family) 0 else 1 }
+    Choice(
+        "Vulkan driver",
+        (state.gpu?.let { "This device: ${it.name}" + (it.family?.let { f -> " (${f.variant} builds)" } ?: "") + ". " } ?: "") +
+            "What Steam, gamescope and every game draw with. Newer Turnip builds can run games faster or fix " +
+            "rendering; if one misbehaves, go back to the built-in one. A game's own settings can pick another.",
+        listOf(VulkanDrivers.RUNTIME) + state.drivers.map { it.id }, state.driver,
+        label = { id ->
+            if (id == VulkanDrivers.RUNTIME) "Built-in Turnip"
+            else state.drivers.first { it.id == id }.let { it.name + if (it.variant == family?.variant) " ★" else "" }
+        },
+        extra = {
+            for (d in offered) {
+                val progress = state.driverDownload?.takeIf { it.first == d.id }?.second
+                SecondaryButton(onClick = { onChange(SettingsChange.DriverInstall(d)) }) {
+                    Text(
+                        if (progress != null) "Downloading ${(progress * 100).toInt()}%"
+                        else "Download ${driverLabel(d)}" + if (d.family == family) " (recommended)" else "",
+                    )
+                }
+            }
+            for (d in state.drivers) {
+                if (d.id != state.driver) SecondaryButton(onClick = { onChange(SettingsChange.DriverRemove(d.id)) }) { Text("Remove ${d.name}") }
+            }
+        },
+    ) { onChange(SettingsChange.Driver(it)) }
+}
+
+internal fun driverLabel(d: VulkanDrivers.CatalogDriver) = "Turnip ${d.version.substringBefore('-')} ${d.variant}"
 
 private fun exportMessage(count: Int?, dir: String?) = when {
     count == null -> "Could not write to ${dir ?: "the folder"}. Allow SteamOS Lite storage access, or pick another folder."

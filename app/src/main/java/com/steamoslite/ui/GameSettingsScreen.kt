@@ -28,6 +28,7 @@ import com.steamoslite.runtime.FexCore
 import com.steamoslite.runtime.GameSettings
 import com.steamoslite.runtime.GameSettingsStore
 import com.steamoslite.runtime.Settings
+import com.steamoslite.runtime.VulkanDrivers
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -41,6 +42,8 @@ internal data class GameSettingsState(
     val globalPreset: Settings.FexPreset = Settings.FexPreset.INTERMEDIATE,
     val globalLayer: Settings.CompatLayer = Settings.CompatLayer.ARM64,
     val globalEmulator: Settings.X86Emulator = Settings.X86Emulator.BOX64,
+    val drivers: List<VulkanDrivers.Installed> = emptyList(),
+    val globalDriver: String = VulkanDrivers.RUNTIME,
 )
 
 /** One game's settings. [id] is the id Steam starts it with (see GameSettingsStore). */
@@ -55,6 +58,7 @@ internal fun GameSettingsRoute(id: String, title: String, onBack: () -> Unit) {
             GameSettingsState(
                 title, GameSettingsStore.get(context, id), FexCore.pick(context), Dxvk.pick(context),
                 Settings.fexPreset(context), Settings.compatLayer(context), Settings.x86Emulator(context),
+                VulkanDrivers.installed(context), VulkanDrivers.selected(context),
             )
         }
     }
@@ -114,6 +118,15 @@ internal fun GameSettingsScreen(state: GameSettingsState, onBack: () -> Unit, on
         }
         item { VersionChoice(FexCore, state.fex, s.fexCore) { onChange(s.copy(fexCore = it)) } }
         item { VersionChoice(Dxvk, state.dxvk, s.dxvk) { onChange(s.copy(dxvk = it)) } }
+        item {
+            fun name(id: String) = if (id == VulkanDrivers.RUNTIME) "Built-in Turnip" else state.drivers.firstOrNull { it.id == id }?.name ?: id
+            Choice(
+                "Vulkan driver",
+                "The Turnip build this game draws with. Download more in Settings.",
+                listOf<String?>(null, VulkanDrivers.RUNTIME) + state.drivers.map { it.id }, s.vkDriver,
+                label = { it?.let(::name) ?: "Global (${name(state.globalDriver)})" },
+            ) { onChange(s.copy(vkDriver = it)) }
+        }
     }
 }
 
