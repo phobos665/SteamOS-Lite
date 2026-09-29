@@ -21,6 +21,7 @@ object Settings {
     private const val CLIENT_ALL_CORES = "clientAllCores"
     private const val CLIENT_TUNING = "clientTuning"
     private const val NO_XALIA = "noXalia"
+    private const val DECK_MODE = "deckMode"
     private const val KEEP_RUNNING = "keepRunning"
     private const val VKD3D_FEATURE_LEVEL = "vkd3dFeatureLevel"
     private const val VKD3D_SHADER_MODEL = "vkd3dShaderModel"
@@ -140,6 +141,11 @@ object Settings {
     fun noXalia(context: Context) = prefs(context).getBoolean(NO_XALIA, true)
 
     fun setNoXalia(context: Context, on: Boolean) = put(context) { putBoolean(NO_XALIA, on) }
+
+    /** Steam as on a Steam Deck: the Quick Access Menu, battery, NIS scaling and the performance overlay. */
+    fun deckMode(context: Context) = prefs(context).getBoolean(DECK_MODE, false)
+
+    fun setDeckMode(context: Context, on: Boolean) = put(context) { putBoolean(DECK_MODE, on) }
 
     /** Leaving SteamOS keeps it running in the background, so coming back or starting a game skips the boot. */
     fun keepRunning(context: Context) = prefs(context).getBoolean(KEEP_RUNNING, true)

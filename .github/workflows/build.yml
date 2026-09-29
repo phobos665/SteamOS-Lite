@@ -65,6 +65,27 @@ jobs:
           done
           ls -l "$D"
 
+      # Steam Deck mode's performance overlay: Valve's aarch64 mangoapp and the libraries it needs,
+      # fetched from Valve's package mirrors and checked against the pinned sha256s.
+      - name: Stage mangoapp
+        run: |
+          set -euo pipefail
+          M=app/src/main/assets/linuxfs/usr/local/lib/mangoapp
+          mkdir -p "$M" mango-pkgs
+          grep -v '^#' linux/mangoapp/packages.txt | while read -r sum url; do
+            [ -n "$url" ] || continue
+            curl -fsSL --retry 3 -o mango-pkgs/pkg.tar.zst "$url"
+            echo "$sum  mango-pkgs/pkg.tar.zst" | sha256sum -c -
+            tar --use-compress-program=unzstd -xf mango-pkgs/pkg.tar.zst -C mango-pkgs
+            rm mango-pkgs/pkg.tar.zst
+          done
+          install -m644 mango-pkgs/usr/bin/mangoapp "$M/mangoapp"
+          for so in libfmt.so.10 libspdlog.so.1.13 libglfw.so.3 libtraceevent.so.1 libtracefs.so.1; do
+            cp -L "mango-pkgs/usr/lib/$so" "$M/$so"
+          done
+          rm -rf mango-pkgs
+          ls -l "$M"
+
       # Box64 runs x86_64 Proton for the games set to it: a glibc aarch64 build like the preloads,
       # staged into the runtime at every session start. Cached by version; a build takes minutes.
       - name: Cache Box64

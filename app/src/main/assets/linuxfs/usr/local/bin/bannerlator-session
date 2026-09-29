@@ -85,6 +85,17 @@ if [ -z "${BL_INSIDE:-}" ]; then
     args+=(-r "$BL_REFRESH")
   fi
   [ "$mode" = steam ] && args+=(-e)
+  # Deck mode's performance overlay (Quick Access Menu > Performance) is drawn by mangoapp, which
+  # gamescope starts beside the client; the client sets the level by rewriting the config file. It
+  # starts hidden until the client writes a level. BL_MANGOAPP=0 turns it off.
+  if [ "$mode" = steam ] && [ "${BL_STEAMDECK:-0}" = 1 ] && [ "${BL_MANGOAPP:-1}" = 1 ] \
+     && [ -x /usr/local/lib/mangoapp/mangoapp ]; then
+    MANGOHUD_CONFIGFILE=$(mktemp /tmp/mangohud.XXXXXXXX)
+    echo no_display > "$MANGOHUD_CONFIGFILE"
+    export MANGOHUD_CONFIGFILE STEAM_USE_MANGOAPP=1 STEAM_MANGOAPP_PRESETS_SUPPORTED=1 STEAM_MANGOAPP_HORIZONTAL_SUPPORTED=1
+    args+=(--mangoapp)
+    echo "== gamescope: mangoapp on"
+  fi
   step "starting gamescope"
   export BL_INSIDE=1
   exec gamescope "${args[@]}" -- "$0" "$mode" "$@"
@@ -421,11 +432,67 @@ BUSCONF
         done
       ) &
     fi
+    # Deck mode: -steamdeck puts the Quick Access Menu and the Deck pages on screen, and the QAM's
+    # performance overlay stays greyed out without -steamos3. -steamos3 also makes the client
+    # manage its branch as SteamOS does and write steamdeck_stable to package/beta; a branch on
+    # disk that disagrees with -clientbeta is an update that never installs (exit 42 for ever), so
+    # the loop below puts package/beta back before every start. The SteamOS helpers the client
+    # calls in this mode are staged as no-op stubs under /usr/bin.
+    client_ui=(-gamepadui)
+    steam_channel=publicbeta
+    if [ "${BL_STEAMDECK:-0}" = 1 ]; then
+      client_ui+=(-steamdeck -steamos3)
+      # The QAM lists NVIDIA Image Scaling only when told gamescope has it (it does).
+      export STEAM_GAMESCOPE_NIS_SUPPORTED=1
+      echo "== steam: Deck mode on (-steamdeck -steamos3)"
+    fi
+    # What a killed session leaves behind: .crash opens the client's update screen on a spinner,
+    # and the web helper's Singleton locks, owned by a process that is gone, can leave Big Picture
+    # blank. No client or helper is running at this point.
+    if ! pgrep -f '[/]steamwebhelper|[s]teamrtarm64/steam' >/dev/null 2>&1; then
+      for _f in "$steam_root/.crash" "$steam_root/steam.pid" \
+                "$steam_root/config/htmlcache/SingletonLock" "$steam_root/config/htmlcache/SingletonCookie" \
+                "$steam_root/config/htmlcache/SingletonSocket"; do
+        { [ -e "$_f" ] || [ -L "$_f" ]; } && rm -f "$_f" && echo "== steam: cleared ${_f##*/} from an earlier session"
+      done
+      unset _f
+    fi
+    # Decky Loader, when the app has installed and enabled it: a supervisor that restarts the loader
+    # a few times if it exits, and goes with the session.
+    decky_loader=$HOME/homebrew/services/PluginLoader
+    if [ -f "$HOME/.bl-decky-enabled" ] && [ -x "$decky_loader" ]; then
+      (
+        decky_child=
+        decky_stop() { [ -z "$decky_child" ] || kill "$decky_child" 2>/dev/null; exit 0; }
+        trap decky_stop TERM INT HUP
+        decky_exits=0
+        while :; do
+          "$decky_loader" >>"$HOME/homebrew/services/PluginLoader.log" 2>&1 &
+          decky_child=$!
+          decky_status=0
+          wait "$decky_child" || decky_status=$?
+          decky_child=
+          decky_exits=$((decky_exits + 1))
+          if [ "$decky_exits" -ge 5 ]; then
+            echo "== Decky: stopped after $decky_exits loader exits (last status $decky_status)"
+            break
+          fi
+          echo "== Decky: loader exited with status $decky_status; restart $((decky_exits + 1))/5"
+          sleep $((decky_exits * 3))
+        done
+      ) &
+      decky_supervisor=$!
+      echo "== Decky: supervisor started"
+    fi
     # The client exits 42 when it has updated itself and wants a fresh start (steam.sh does this).
     while :; do
       rm -f "$HOME/.bl-restart-once"
+      if [ -f "$steam_root/package/beta" ] && [ "$(cat "$steam_root/package/beta" 2>/dev/null)" != "$steam_channel" ]; then
+        echo "== steam: client branch on disk was '$(cat "$steam_root/package/beta")', set to '$steam_channel'"
+        echo "$steam_channel" > "$steam_root/package/beta"
+      fi
       step "starting the Steam client"
-      "$steam_root/steamrtarm64/steam" -gamepadui -clientbeta publicbeta "${update_args[@]}" \
+      "$steam_root/steamrtarm64/steam" "${client_ui[@]}" -clientbeta "$steam_channel" "${update_args[@]}" \
         -no-cef-sandbox -cef-force-gpu -cef-ozone-platform=x11 \
         -cef-use-gl=angle -cef-use-angle=vulkan "$@"
       rc=$?
@@ -440,7 +507,7 @@ BUSCONF
       fi
       [ "$rc" -eq 42 ] || break
     done
-    kill ${netmanager:-} ${system_bus:-} ${launch_watch:-} 2>/dev/null || true
+    kill ${netmanager:-} ${system_bus:-} ${launch_watch:-} ${decky_supervisor:-} 2>/dev/null || true
     reap_orphans
     exit "$rc"
     ;;

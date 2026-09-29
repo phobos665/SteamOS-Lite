@@ -34,6 +34,7 @@ class Session(
     private val root = LinuxRuntime.rootDir(this.context)
     private val pulse = PulseAudio(this.context)
     private val network = NetworkLink(this.context, root)
+    private val battery = BatterySysfs(this.context, File(this.context.cacheDir, "power_supply"))
     private var process: SessionProcess? = null
     private val storeBridge = StoreBridge(this.context)
 
@@ -117,6 +118,7 @@ class Session(
         }
         if (Settings.clientTuning(context)) Settings.CLIENT_TUNING_ENV.forEach { (k, v) -> guest += "$k=$v" }
         if (Settings.noXalia(context)) guest += "PROTON_USE_XALIA=0"
+        if (Settings.deckMode(context)) guest += "BL_STEAMDECK=1"
         // Games launched from the client run x86 code under FEX, with Settings' preset
         // (Intermediate by default: without store ordering, multithreaded titles can hang at load).
         Settings.fexPreset(context).env.forEach { (k, v) -> guest += "$k=$v" }
@@ -152,6 +154,8 @@ class Session(
         appId?.let { guest += "steam://rungameid/$it" }
 
         val binds = mutableListOf(fakeInputDir.path + ":/dev/input")
+        battery.write()
+        binds += battery.dir.path + ":/sys/class/power_supply"
         // The SD card's library: the scripts register /mnt/bannerlator-sd with the client as its
         // "SD Card" library folder, but nothing was bound there, so it never appeared.
         sdLibrary(context)?.let {
@@ -181,6 +185,7 @@ class Session(
         network.publish()
         network.start()
         pulse.start()
+        battery.start()
         mark("network link and audio started")
         process = SessionProcess(command, hostEnv, root, File(logs, "proot.log")) { status ->
             Log.i(TAG, "session ended: $status")
@@ -201,6 +206,7 @@ class Session(
         storeBridge.stop()
         network.stop()
         pulse.stop()
+        battery.stop()
         logDir?.let { collectLogs(it) }
         stopAppLog()
     }
@@ -351,7 +357,15 @@ class Session(
             "session", "steam-install", "steam-compat", "steam-library",
             "seed-redists", "netmanager", "proton-extra", "steam-shortcuts",
         ).map { "usr/local/bin/bannerlator-$it" }.map { it to it } +
-            listOf("usr/local/bin/bl-store-launch").map { it to it }
+            listOf("usr/local/bin/bl-store-launch").map { it to it } +
+            // Deck mode: the SteamOS helpers the client calls, as no-op stubs, and Valve's mangoapp
+            // with the libraries the runtime lacks (the build stages those; a local build has none).
+            (listOf("steamos-update", "steamos-select-branch", "steamos-session-select", "jupiter-biosupdate").map { "usr/bin/$it" } +
+                listOf("steamos-priv-write", "steamos-set-timezone", "steamos-update", "steamos-select-branch", "jupiter-biosupdate", "jupiter-dock-updater")
+                    .map { "usr/bin/steamos-polkit-helpers/$it" } +
+                listOf("usr/local/bin/mangoapp") +
+                listOf("mangoapp", "libfmt.so.10", "libspdlog.so.1.13", "libglfw.so.3", "libtraceevent.so.1", "libtracefs.so.1")
+                    .map { "usr/local/lib/mangoapp/$it" }).map { it to it }
 
         const val SD_GUEST_PATH = "/mnt/bannerlator-sd"
 

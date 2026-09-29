@@ -9,3 +9,4 @@ local.properties
 app/src/main/assets/linuxfs/*.so
 __pycache__/
 app/src/main/assets/linuxfs/box64
+app/src/main/assets/linuxfs/usr/local/lib/mangoapp/

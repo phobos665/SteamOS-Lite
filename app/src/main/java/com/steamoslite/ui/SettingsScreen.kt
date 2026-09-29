@@ -36,6 +36,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.steamoslite.frontend.FrontendExport
 import com.steamoslite.runtime.ComponentStore
+import com.steamoslite.runtime.DeckyLoader
 import com.steamoslite.runtime.Dxvk
 import com.steamoslite.runtime.FexCore
 import com.steamoslite.runtime.Nightlies
@@ -85,6 +86,11 @@ internal data class SettingsState(
     val nightlies: Map<ComponentStore, List<Nightlies.Item>> = emptyMap(),
     /** The component package being downloaded and how far it is. */
     val componentDownload: Pair<String, Float>? = null,
+    /** The installed Decky Loader version, or null. */
+    val decky: String? = null,
+    val deckyEnabled: Boolean = false,
+    /** How far a Decky Loader download is, while one runs. */
+    val deckyDownload: Float? = null,
     val flags: Map<SettingFlag, Boolean> = SettingFlag.entries.associateWith { it.default },
     val gpu: VulkanDrivers.Gpu? = null,
     val drivers: List<VulkanDrivers.Installed> = emptyList(),
@@ -117,6 +123,9 @@ internal sealed interface SettingsChange {
     data class ProtonLog(val on: Boolean) : SettingsChange
     data class ClientAllCores(val on: Boolean) : SettingsChange
     data class Flag(val flag: SettingFlag, val on: Boolean) : SettingsChange
+    data object DeckyInstall : SettingsChange
+    data class DeckyEnabled(val on: Boolean) : SettingsChange
+    data object DeckyUninstall : SettingsChange
     data class LoadNightlies(val store: ComponentStore) : SettingsChange
     data class NightlyInstall(val store: ComponentStore, val item: Nightlies.Item) : SettingsChange
     data class KeepRunning(val on: Boolean) : SettingsChange
@@ -165,6 +174,8 @@ internal fun SettingsRoute(onBack: () -> Unit) {
                 frontendDir = FrontendExport.dir(context)?.path,
                 shortcutTest = SteamShortcuts.testEnabled(context),
                 flags = SettingFlag.entries.associateWith { it.get(context) },
+                decky = DeckyLoader.installed(context),
+                deckyEnabled = DeckyLoader.enabled(context),
                 gpu = VulkanDrivers.gpu(),
                 drivers = VulkanDrivers.installed(context),
                 driver = VulkanDrivers.selected(context),
@@ -231,6 +242,27 @@ internal fun SettingsRoute(onBack: () -> Unit) {
                     message = if (change is SettingsChange.FrontendDir && change.path == null) "Frontend shortcuts removed."
                     else exportMessage(count, FrontendExport.dir(context)?.path),
                 )
+            }
+            return@SettingsScreen
+        }
+        if (change is SettingsChange.DeckyInstall) {
+            if (state.deckyDownload != null) return@SettingsScreen
+            state = state.copy(deckyDownload = 0f, message = null)
+            scope.launch {
+                val result = withContext(Dispatchers.IO) {
+                    runCatching {
+                        val release = DeckyLoader.latest() ?: error("no release could be found")
+                        DeckyLoader.install(context, release) { f -> scope.launch { if (state.deckyDownload != null) state = state.copy(deckyDownload = f) } }
+                        DeckyLoader.setEnabled(context, true)
+                        release.tag
+                    }
+                }
+                state = state.copy(
+                    deckyDownload = null,
+                    message = result.fold({ "Decky Loader $it installed. It starts with SteamOS; open it from Steam's Quick Access Menu." },
+                        { "Could not install Decky Loader: ${it.message}" }),
+                )
+                reload()
             }
             return@SettingsScreen
         }
@@ -310,12 +342,14 @@ internal fun SettingsRoute(onBack: () -> Unit) {
                     is SettingsChange.ProtonLog -> Settings.setProtonLog(context, change.on)
                     is SettingsChange.ClientAllCores -> Settings.setClientAllCores(context, change.on)
                     is SettingsChange.Flag -> change.flag.set(context, change.on)
+                    is SettingsChange.DeckyEnabled -> DeckyLoader.setEnabled(context, change.on)
+                    SettingsChange.DeckyUninstall -> DeckyLoader.uninstall(context)
                     is SettingsChange.KeepRunning -> Settings.setKeepRunning(context, change.on)
                     is SettingsChange.OnScreen -> Settings.setOnScreenController(context, change.on)
                     is SettingsChange.ShortcutTest -> SteamShortcuts.setTest(context, change.on)
                     is SettingsChange.Driver -> VulkanDrivers.select(context, change.id)
                     is SettingsChange.DriverRemove -> VulkanDrivers.remove(context, change.id)
-                    is SettingsChange.Import, is SettingsChange.DriverInstall, is SettingsChange.LoadNightlies, is SettingsChange.NightlyInstall, SettingsChange.FrontendPick, SettingsChange.FrontendExportNow,
+                    is SettingsChange.Import, is SettingsChange.DriverInstall, is SettingsChange.LoadNightlies, is SettingsChange.NightlyInstall, SettingsChange.DeckyInstall, SettingsChange.FrontendPick, SettingsChange.FrontendExportNow,
                     is SettingsChange.FrontendDir -> {}
                 }
             }
@@ -476,6 +510,7 @@ internal fun SettingsScreen(state: SettingsState, onBack: () -> Unit, onChange: 
         items(SettingFlag.entries.filter { it.section == "Steam" }) { flag ->
             Toggle(flag.title, flag.detail, state.flags[flag] ?: flag.default) { onChange(SettingsChange.Flag(flag, it)) }
         }
+        item { DeckyCard(state, onChange) }
 
         item { Section("Frontends") }
         item {
@@ -701,6 +736,30 @@ private fun exportMessage(count: Int?, dir: String?) = when {
     else -> "$count games exported to $dir."
 }
 
+/** Decky Loader: install, turn on and off, remove. */
+@Composable
+private fun DeckyCard(state: SettingsState, onChange: (SettingsChange) -> Unit) {
+    SettingCard(
+        "Decky Loader" + (state.decky?.let { " · $it" } ?: ""),
+        "Plugins in Steam's Quick Access Menu. While it is on, Steam opens its debugging port on this device, " +
+            "which lets other apps on it control Steam; turn it off when you do not use it.",
+    ) {
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            val progress = state.deckyDownload
+            when {
+                progress != null -> SecondaryButton(onClick = {}) { Text("Downloading ${(progress * 100).toInt()}%") }
+                state.decky == null -> PrimaryButton(onClick = { onChange(SettingsChange.DeckyInstall) }) { Text("Install") }
+                else -> {
+                    if (state.deckyEnabled) SecondaryButton(onClick = { onChange(SettingsChange.DeckyEnabled(false)) }) { Text("Turn off") }
+                    else PrimaryButton(onClick = { onChange(SettingsChange.DeckyEnabled(true)) }) { Text("Turn on") }
+                    SecondaryButton(onClick = { onChange(SettingsChange.DeckyInstall) }) { Text("Update") }
+                    SecondaryButton(onClick = { onChange(SettingsChange.DeckyUninstall) }) { Text("Remove") }
+                }
+            }
+        }
+    }
+}
+
 /** On/off settings that need nothing but a switch, grouped by the section they show in. */
 internal enum class SettingFlag(
     val section: String,
@@ -714,6 +773,12 @@ internal enum class SettingFlag(
         "Steam", "Faster Steam interface",
         "Lazy descriptors, threaded GL and no GL error checks for Steam's interface, which draws with OpenGL on Vulkan.",
         true, Settings::clientTuning, Settings::setClientTuning,
+    ),
+    DECK_MODE(
+        "Steam", "Steam Deck mode",
+        "Steam runs as on a Steam Deck: the Quick Access Menu with battery, NIS scaling and the performance overlay. " +
+            "Steam's own Deck settings may show options that do nothing here.",
+        false, Settings::deckMode, Settings::setDeckMode,
     ),
     START_OFFLINE(
         "Steam", "Start Steam offline",
