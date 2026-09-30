@@ -258,7 +258,9 @@ private fun Home(
             SteamLibrary.installedGames(context).also { FrontendExport.sync(context, it) }
         }
     }
-    val uninstalled by produceState(initialValue = emptyList<UninstalledGame>(), games) {
+    // Keyed on the same things as the installed list, not only on it: with nothing installed that
+    // list stays empty (and equal) across a sign-in, and this one would never be read.
+    val uninstalled by produceState(initialValue = emptyList<UninstalledGame>(), resumeCount, ready, libraryVersion, games) {
         if (!ready) return@produceState
         value = withContext(Dispatchers.IO) { SteamLibrary.uninstalledGames(context, games.map { it.appId }) }
         // While something downloads, its percentage follows along (the rest of the list stays put).

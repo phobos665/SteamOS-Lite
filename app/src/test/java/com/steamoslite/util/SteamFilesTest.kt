@@ -94,6 +94,7 @@ class SteamFilesTest {
                     "appid" to 220,
                     "common" to mapOf(
                         "name" to "Half-Life 2",
+                        "type" to "Game",
                         "steam_release_date" to "1100563200",
                         "metacritic_score" to "96",
                         "controller_support" to "full",
@@ -126,6 +127,11 @@ class SteamFilesTest {
             assertEquals(3, info.deckCategory)
             assertEquals("full", info.controllerSupport)
             assertNull(SteamFiles.appInfo(f, 999))
+            // Every app in one pass, and only the ones asked for when given.
+            val all = SteamFiles.appKinds(f, null)
+            assertEquals(SteamFiles.AppKind("Half-Life 2", "game"), all[220L])
+            assertEquals("Other", all[10L]?.name)
+            assertEquals(setOf(220L), SteamFiles.appKinds(f, setOf(220L)).keys)
         } finally {
             f.delete()
         }

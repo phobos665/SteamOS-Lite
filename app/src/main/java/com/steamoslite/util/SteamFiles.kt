@@ -87,9 +87,9 @@ object SteamFiles {
     /** An app's name and type ("game", "demo", "tool", "dlc"...), lowercased type. */
     data class AppKind(val name: String, val type: String)
 
-    /** Name and type of each of [appIds] that appinfo.vdf has, in one pass over the file. */
-    fun appKinds(file: File, appIds: Set<Long>): Map<Long, AppKind> = runCatching {
-        if (appIds.isEmpty()) return emptyMap()
+    /** Name and type of each of [appIds] (every app when null) that appinfo.vdf has, in one pass over the file. */
+    fun appKinds(file: File, appIds: Set<Long>?): Map<Long, AppKind> = runCatching {
+        if (appIds != null && appIds.isEmpty()) return emptyMap()
         RandomAccessFile(file, "r").use { raf ->
             val buf = raf.channel.map(FileChannel.MapMode.READ_ONLY, 0, raf.length()).order(ByteOrder.LITTLE_ENDIAN)
             val out = HashMap<Long, AppKind>()
@@ -110,11 +110,13 @@ object SteamFiles {
     }
 
     /** Parses the entries of [wanted] only, skipping the rest by their size; stops once all are seen. */
-    private fun forEachAppInfoEntry(buf: ByteBuffer, wanted: Set<Long>, onEntry: (Long, Map<String, Any>) -> Unit) {
+    private fun forEachAppInfoEntry(buf: ByteBuffer, wanted: Set<Long>?, onEntry: (Long, Map<String, Any>) -> Unit) {
         buf.position(0)
         val magic = buf.int
         val version = magic and 0xFF
-        if ((magic ushr 8) != 0x075644 || version !in 0x27..0x29) return
+        // 27-29 are known; a newer one is read as 29 (the last change moved keys into a string
+        // table), and an entry that no longer parses is skipped rather than failing the file.
+        if ((magic ushr 8) != 0x075644 || version !in 0x27..0x2F) return
         buf.int // universe
         var keys: List<String>? = null
         if (version >= 0x29) {
@@ -123,13 +125,13 @@ object SteamFiles {
             val count = table.int
             keys = List(count) { KeyValues.cString(table) }
         }
-        var left = wanted.size
+        var left = wanted?.size ?: Int.MAX_VALUE
         while (buf.remaining() >= 8 && left > 0) {
             val id = buf.int.toLong() and 0xFFFFFFFFL
             if (id == 0L) return
             val size = buf.int
             val start = buf.position()
-            if (id in wanted) {
+            if (wanted == null || id in wanted) {
                 // infoState, lastUpdated, picsToken, sha1, changeNumber, and from 28 the binary sha1.
                 buf.position(start + 4 + 4 + 8 + 20 + 4 + if (version >= 0x28) 20 else 0)
                 runCatching { KeyValues.parseBinary(buf, keys) }.getOrNull()?.let { onEntry(id, it) }

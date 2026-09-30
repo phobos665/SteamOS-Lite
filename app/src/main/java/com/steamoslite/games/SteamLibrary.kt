@@ -70,11 +70,25 @@ object SteamLibrary {
             .mapNotNull { f -> Regex("^(\\d+)(_.*)?").find(f.name)?.groupValues?.get(1) }
             .filter { it !in known }
             .toSet()
-        val kinds = SteamFiles.appKinds(File(root, "appcache/appinfo.vdf"), cached.mapNotNull { it.toLongOrNull() }.toSet())
+        val appInfo = File(root, "appcache/appinfo.vdf")
+        // The client fetches app info for every licence at sign-in, but caches library art only for
+        // what it has shown; with no art cached yet, every game in the app info stands in.
+        val kinds = if (cached.isNotEmpty()) SteamFiles.appKinds(appInfo, cached.mapNotNull { it.toLongOrNull() }.toSet())
+        else allKinds(appInfo).filterKeys { it.toString() !in known }
         val owned = kinds.filter { (_, kind) -> kind.type == "game" || kind.type == "demo" }
             .map { (id, kind) -> UninstalledGame(id.toString(), kind.name, cover(root, id.toString()), null) }
             .sortedBy { it.name.lowercase() }
         return pending + owned
+    }
+
+    private var allKindsCache: Triple<Long, Long, Map<Long, SteamFiles.AppKind>>? = null
+
+    /** Every app in appinfo.vdf, read once per version of the file (it is tens of megabytes). */
+    @Synchronized
+    private fun allKinds(file: File): Map<Long, SteamFiles.AppKind> {
+        val stamp = file.lastModified() to file.length()
+        allKindsCache?.let { (modified, size, kinds) -> if (modified == stamp.first && size == stamp.second) return kinds }
+        return SteamFiles.appKinds(file, null).also { allKindsCache = Triple(stamp.first, stamp.second, it) }
     }
 
     /** Whether the client has [appId] fully installed. */
