@@ -59,8 +59,11 @@ internal object SessionHost {
      * Asks the running client to start [appId]. The session script picks the line up from
      * ~/.bl-launch within a second and hands it to the client.
      */
-    fun launch(context: Context, appId: String) {
-        File(LinuxRuntime.rootDir(context), "root/.bl-launch").appendText("steam://rungameid/$appId\n")
+    fun launch(context: Context, appId: String) = send(context, "steam://rungameid/$appId")
+
+    /** Hands any steam:// URL to the running client the same way. */
+    fun send(context: Context, url: String) {
+        File(LinuxRuntime.rootDir(context), "root/.bl-launch").appendText(url + "\n")
     }
 
     /** Takes the session down and ends the process: everything it started is process-wide. */

@@ -1,7 +1,6 @@
 package com.steamoslite.stores
 
 import android.app.Notification
-import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
@@ -10,9 +9,9 @@ import android.content.Intent
 import android.net.wifi.WifiManager
 import android.os.IBinder
 import android.os.PowerManager
+import com.steamoslite.games.GameNotifications
 import com.steamoslite.stores.epic.EpicDownloader
 import com.steamoslite.stores.gog.GOGDownloader
-import com.steamoslite.ui.MainActivity
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -147,14 +146,11 @@ class StoreDownloadService : Service() {
     }
 
     private fun createChannel() {
-        val manager = getSystemService(NotificationManager::class.java)
-        if (manager.getNotificationChannel(CHANNEL) == null) {
-            manager.createNotificationChannel(NotificationChannel(CHANNEL, "Game downloads", NotificationManager.IMPORTANCE_LOW))
-        }
+        GameNotifications.channel(this)
     }
 
     private fun notification(text: String, percent: Int): Notification {
-        val open = PendingIntent.getActivity(this, 0, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE)
+        val open = GameNotifications.openApp(this)
         val cancel = PendingIntent.getService(
             this, 3, Intent(this, StoreDownloadService::class.java).setAction(ACTION_CANCEL), PendingIntent.FLAG_IMMUTABLE,
         )
@@ -171,7 +167,7 @@ class StoreDownloadService : Service() {
     }
 
     companion object {
-        private const val CHANNEL = "games"
+        private const val CHANNEL = GameNotifications.CHANNEL
         private const val NOTIFICATION_ID = 10
         private const val ACTION_CANCEL = "com.steamoslite.CANCEL_GAME_DOWNLOAD"
         private const val EXTRA_KEY = "key"

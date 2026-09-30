@@ -109,7 +109,7 @@ internal fun LazyListScope.achievementRows(
     var start = 0
     for ((label, group) in listOf("Unlocked" to unlocked, "Locked" to locked)) {
         if (group.isEmpty()) continue
-        item(key = "ach-group-$label") { AchievementDivider("$label · ${group.size}") }
+        item(key = "ach-group-$label") { LabelDivider("$label · ${group.size}") }
         val offset = start
         itemsIndexed(group, key = { _, a -> "ach-" + a.id }) { i, a -> AchievementRow(appId, a, image, density, rowModifier(offset + i)) }
         start += group.size
@@ -118,7 +118,7 @@ internal fun LazyListScope.achievementRows(
 
 /** A thin line with a small label in front: divides the list without starting a new section. */
 @Composable
-internal fun AchievementDivider(label: String) {
+internal fun LabelDivider(label: String) {
     Row(Modifier.fillMaxWidth().padding(top = 2.dp), verticalAlignment = Alignment.CenterVertically) {
         Text(label.uppercase(), color = AppColors.textMuted, fontSize = 11.sp, fontWeight = FontWeight.Medium, letterSpacing = 0.8.sp)
         Spacer(Modifier.width(10.dp))

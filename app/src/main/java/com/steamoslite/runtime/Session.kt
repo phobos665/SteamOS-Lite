@@ -28,12 +28,15 @@ class Session(
     private val width: Int,
     private val height: Int,
     private val refreshHz: Int,
+    /** A steam:// URL for the client to act on as it starts (an install), or null. */
+    private val url: String? = null,
     private val onExit: (Int) -> Unit,
 ) {
     private val context = context.applicationContext
     private val root = LinuxRuntime.rootDir(this.context)
     private val pulse = PulseAudio(this.context)
     private val network = NetworkLink(this.context, root)
+    private val steamDownloads = com.steamoslite.games.SteamDownloadNotifier(this.context)
     private val battery = BatterySysfs(this.context, File(this.context.cacheDir, "power_supply"))
     private var process: SessionProcess? = null
     private val storeBridge = StoreBridge(this.context)
@@ -154,6 +157,7 @@ class Session(
         guest += LinuxRuntime.SESSION_SCRIPT
         guest += LinuxRuntime.MODE_STEAM
         appId?.let { guest += "steam://rungameid/$it" }
+        url?.let { guest += it }
 
         val binds = mutableListOf(fakeInputDir.path + ":/dev/input")
         battery.write()
@@ -187,6 +191,7 @@ class Session(
         network.publish()
         network.start()
         pulse.start()
+        steamDownloads.start()
         battery.start()
         mark("network link and audio started")
         process = SessionProcess(command, hostEnv, root, File(logs, "proot.log")) { status ->
@@ -208,6 +213,7 @@ class Session(
         storeBridge.stop()
         network.stop()
         pulse.stop()
+        steamDownloads.stop()
         battery.stop()
         logDir?.let { collectLogs(it) }
         stopAppLog()

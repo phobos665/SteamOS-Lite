@@ -47,10 +47,12 @@ import androidx.compose.ui.unit.sp
 import com.steamoslite.games.GameDetails
 import com.steamoslite.games.GameDetailsReader
 import com.steamoslite.games.InstalledGame
+import com.steamoslite.games.SteamLibrary
 import com.steamoslite.games.StoreDetails
 import com.steamoslite.games.StoreDetailsCache
 import com.steamoslite.util.RemoteImages
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.text.DateFormat
@@ -64,9 +66,21 @@ internal fun GameDetailsRoute(
     onPlay: () -> Unit,
     onPin: (() -> Unit)?,
     onSettings: (() -> Unit)? = null,
+    onInstall: () -> Unit = {},
+    onOpenDownloads: () -> Unit = {},
 ) {
     val context = LocalContext.current
     BackHandler(onBack = onBack)
+    // Re-read every few seconds while the page is open, so a download started from it shows up.
+    val install by produceState<InstallState>(InstallState.Installed, game.appId) {
+        while (true) {
+            value = withContext(Dispatchers.IO) {
+                SteamLibrary.downloads(context).firstOrNull { it.appId == game.appId }?.download?.let { InstallState.Downloading(it.fraction) }
+                    ?: if (SteamLibrary.isInstalled(context, game.appId)) InstallState.Installed else InstallState.NotInstalled
+            }
+            delay(3_000)
+        }
+    }
     val details by produceState<GameDetails?>(null, game.appId) {
         value = withContext(Dispatchers.IO) { GameDetailsReader.read(context, game) }
     }
@@ -75,7 +89,14 @@ internal fun GameDetailsRoute(
         store = withContext(Dispatchers.IO) { StoreDetailsCache.cached(context, game.appId) }
         withContext(Dispatchers.IO) { StoreDetailsCache.load(context, game.appId) }?.let { store = it }
     }
-    GameDetailsScreen(game, details, store, onBack, onPlay, onPin, onSettings)
+    GameDetailsScreen(game, details, store, onBack, onPlay, onPin, onSettings, install = install, onInstall = onInstall, onOpenDownloads = onOpenDownloads)
+}
+
+/** Whether a game can be played, is on its way, or has to be installed first. */
+internal sealed interface InstallState {
+    data object Installed : InstallState
+    data object NotInstalled : InstallState
+    data class Downloading(val fraction: Float) : InstallState
 }
 
 /** The page as drawn (the screenshot tests draw it too, with [image] loading nothing). */
@@ -90,6 +111,9 @@ internal fun GameDetailsScreen(
     onPin: (() -> Unit)?,
     onSettings: (() -> Unit)? = null,
     image: @Composable (source: Any?, maxPx: Int) -> Bitmap? = { source, maxPx -> rememberImage(source, maxPx) },
+    install: InstallState = InstallState.Installed,
+    onInstall: () -> Unit = {},
+    onOpenDownloads: () -> Unit = {},
 ) {
     BoxWithConstraints(Modifier.fillMaxSize()) {
         val compact = maxHeight < 480.dp
@@ -114,8 +138,17 @@ internal fun GameDetailsScreen(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(10.dp),
                     ) {
-                        PrimaryButton(onClick = onPlay, modifier = Modifier.focusRequester(play)) {
-                            Text("Play", fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
+                        when (install) {
+                            InstallState.Installed -> PrimaryButton(onClick = onPlay, modifier = Modifier.focusRequester(play)) {
+                                Text("Play", fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
+                            }
+                            InstallState.NotInstalled -> PrimaryButton(onClick = onInstall, modifier = Modifier.focusRequester(play)) {
+                                Text("Install", fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
+                            }
+                            // Steam's own download page, with pause and resume.
+                            is InstallState.Downloading -> SecondaryButton(onClick = onOpenDownloads, modifier = Modifier.focusRequester(play)) {
+                                Text("Downloading ${(install.fraction * 100).toInt()}% · Open in SteamOS")
+                            }
                         }
                         if (onSettings != null) SecondaryButton(onClick = onSettings) { Text("Game settings") }
                         if (onPin != null) SecondaryButton(onClick = onPin) { Text("Add to home screen") }

@@ -14,6 +14,7 @@ import androidx.activity.compose.setContent
 import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -36,6 +37,7 @@ import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.grid.LazyGridItemSpanScope
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.filled.Settings
@@ -54,6 +56,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
@@ -79,6 +82,7 @@ import com.steamoslite.frontend.FrontendExport
 import com.steamoslite.frontend.HomeShortcuts
 import com.steamoslite.games.InstalledGame
 import com.steamoslite.games.SteamLibrary
+import com.steamoslite.games.UninstalledGame
 import com.steamoslite.runtime.InstallService
 import com.steamoslite.runtime.InstallStatus
 import com.steamoslite.runtime.RuntimeInstaller
@@ -88,6 +92,7 @@ import com.steamoslite.stores.Stores
 import com.steamoslite.util.LogShare
 import java.io.File
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -128,6 +133,8 @@ class MainActivity : ComponentActivity() {
                             onPlay = { launch(game.appId) },
                             onPin = if (HomeShortcuts.supported(this)) ({ pin(game) }) else null,
                             onSettings = { settingsFor = game.appId to game.name },
+                            onInstall = { openInSteam("steam://install/${game.appId}") },
+                            onOpenDownloads = { openInSteam("steam://open/downloads") },
                         )
                     }
                     storeGameFor != null -> storeGameFor?.let { game ->
@@ -173,6 +180,17 @@ class MainActivity : ComponentActivity() {
         if (!HomeShortcuts.pin(this, game)) {
             Toast.makeText(this, "The home screen did not accept the shortcut.", Toast.LENGTH_LONG).show()
         }
+    }
+
+    /**
+     * Hands [url] to Steam (an install, its download page) with SteamOS brought to the front,
+     * starting it if it is not running, so whatever Steam shows for it is on screen.
+     */
+    private fun openInSteam(url: String) {
+        startActivity(Intent(this, SessionActivity::class.java).apply {
+            putExtra(SessionActivity.EXTRA_URL, url)
+            putExtra(SessionActivity.EXTRA_TAPPED_AT, System.currentTimeMillis())
+        })
     }
 
     private fun launch(appId: String?) {
@@ -234,11 +252,27 @@ private fun Home(
         }
     }
     val ready = state is RuntimeState.Ready
-    val games by produceState(initialValue = emptyList<InstalledGame>(), resumeCount, ready) {
+    // Bumped when a download finishes while the library is open, so the game moves up to Installed.
+    var libraryVersion by remember { mutableStateOf(0) }
+    val games by produceState(initialValue = emptyList<InstalledGame>(), resumeCount, ready, libraryVersion) {
         if (ready) value = withContext(Dispatchers.IO) {
             // Frontends' shortcuts follow the library: games installed or removed in the last
             // session are added or dropped here (nothing happens while exporting is off).
             SteamLibrary.installedGames(context).also { FrontendExport.sync(context, it) }
+        }
+    }
+    // Keyed on the same things as the installed list, not only on it: with nothing installed that
+    // list stays empty (and equal) across a sign-in, and this one would never be read.
+    val uninstalled by produceState(initialValue = emptyList<UninstalledGame>(), resumeCount, ready, libraryVersion, games) {
+        if (!ready) return@produceState
+        value = withContext(Dispatchers.IO) { SteamLibrary.uninstalledGames(context, games.map { it.appId }) }
+        // While something downloads, its percentage follows along (the rest of the list stays put).
+        while (value.any { it.download != null }) {
+            delay(3_000)
+            val downloads = withContext(Dispatchers.IO) { SteamLibrary.downloads(context) }.associateBy { it.appId }
+            val finished = value.any { it.download != null && it.appId !in downloads }
+            value = value.map { game -> downloads[game.appId] ?: game.copy(download = null) }
+            if (finished) libraryVersion++
         }
     }
 
@@ -260,6 +294,7 @@ private fun Home(
     HomeScreen(
         state = shown,
         games = games,
+        uninstalled = uninstalled,
         onInstall = { InstallService.start(context, it) },
         onCancel = { InstallService.cancel(context) },
         onRetry = {
@@ -288,6 +323,8 @@ private fun Home(
 internal fun HomeScreen(
     state: RuntimeState,
     games: List<InstalledGame>,
+    /** Owned games that are not installed, shown after a divider; downloads in progress first. */
+    uninstalled: List<UninstalledGame> = emptyList(),
     onInstall: (RuntimeInstaller.Release) -> Unit,
     onCancel: () -> Unit,
     onRetry: () -> Unit,
@@ -339,7 +376,7 @@ internal fun HomeScreen(
             }
         }
         if (state is RuntimeState.Ready) {
-            Library(state, games, layout, title, onLaunch, { state.update?.let(onInstall) }, onShareLogs, onOpenProtons, onOpenDetails, coverOf,
+            Library(state, games, uninstalled, layout, title, onLaunch, { state.update?.let(onInstall) }, onShareLogs, onOpenProtons, onOpenDetails, coverOf,
                 tab, onSelectTab, storeTab, storeActions, storeCoverOf, sessionRunning, onStopSession)
         } else {
             Column(Modifier.fillMaxSize().enterFade().verticalScroll(rememberScrollState()).padding(layout.padding)) {
@@ -423,6 +460,7 @@ private fun Progress(s: RuntimeState.Installing, onCancel: () -> Unit) {
 private fun Library(
     s: RuntimeState.Ready,
     games: List<InstalledGame>,
+    uninstalled: List<UninstalledGame>,
     layout: HomeLayout,
     title: @Composable (middle: @Composable () -> Unit) -> Unit,
     onLaunch: (String?) -> Unit,
@@ -444,10 +482,61 @@ private fun Library(
     // The focused game's art behind the library; until a game has focus, the first one's.
     var focusedArt by remember(tab) { mutableStateOf<Bitmap?>(null) }
     val firstArt = if (tab == null) games.firstOrNull()?.let { coverOf(it) } else null
+    // A short screen keeps the tabs in the title row, so the first row of games stays in view.
+    val tabsInTitle = layout.compact && onSelectTab != null
+    val grid = rememberLazyGridState()
+    val scope = rememberCoroutineScope()
+    val tileFocus = remember { mutableMapOf<String, FocusRequester>() }
+    fun visible(key: String) = grid.layoutInfo.visibleItemsInfo.firstOrNull { it.key == key }
+    // The divider between installed and not-installed games throws off the default focus search, which
+    // jumps from the first row of one to the top of the screen; move between the two groups by column.
+    fun focusAcross(from: String, down: Boolean): Boolean {
+        val installed = games.map { it.appId }
+        val notInstalled = uninstalled.map { "u" + it.appId }
+        if (installed.isEmpty() || notInstalled.isEmpty()) return false
+        val me = visible(from) ?: return false
+        val downTarget = if (down) {
+            val last = visible(installed.last()) ?: return false
+            when {
+                me.row == last.row -> notInstalled[minOf(me.column, notInstalled.lastIndex)]
+                me.row == last.row - 1 && me.column > last.column -> installed.last()
+                else -> return false
+            }
+        } else null
+        if (!down && me.row != visible(notInstalled.first())?.row) return false
+        scope.launch {
+            // A tile scrolled out of view is not composed and cannot take focus, so bring it in first.
+            suspend fun reveal(target: String): Boolean {
+                repeat(6) {
+                    if (visible(target) != null) return true
+                    grid.scrollBy(if (down) me.size.height / 2f else -me.size.height / 2f)
+                    withFrameNanos {}
+                }
+                return visible(target) != null
+            }
+            val target = downTarget ?: run {
+                if (!reveal(installed.last())) return@launch
+                val lastColumn = visible(installed.last())?.column ?: return@launch
+                installed[installed.lastIndex - lastColumn + minOf(me.column, lastColumn)]
+            }
+            if (reveal(target)) runCatching { tileFocus[target]?.requestFocus() }
+        }
+        return true
+    }
+    fun Modifier.crossFocus(key: String, installed: Boolean) =
+        focusRequester(tileFocus.getOrPut(key) { FocusRequester() }).onPreviewKeyEvent { e ->
+            val down = when (e.nativeKeyEvent.keyCode) {
+                KeyEvent.KEYCODE_DPAD_DOWN -> true
+                KeyEvent.KEYCODE_DPAD_UP -> false
+                else -> return@onPreviewKeyEvent false
+            }
+            down == installed && e.type == KeyEventType.KeyDown && focusAcross(key, down)
+        }
     Box(Modifier.fillMaxSize()) {
         Backdrop(focusedArt ?: firstArt, Modifier.fillMaxWidth().fillMaxHeight(0.75f))
         LazyVerticalGrid(
             columns = GridCells.Adaptive(layout.tileWidth),
+            state = grid,
             modifier = Modifier.fillMaxSize().enterFade().onPreviewKeyEvent { e ->
                 // L1 / R1 step through the tabs from anywhere in the grid, as Steam's own library does.
                 val step = when (e.nativeKeyEvent.keyCode) {
@@ -463,8 +552,6 @@ private fun Library(
             horizontalArrangement = Arrangement.spacedBy(layout.gap),
             verticalArrangement = Arrangement.spacedBy(layout.gap),
         ) {
-            // A short screen keeps the tabs in the title row, so the first row of games stays in view.
-            val tabsInTitle = layout.compact && onSelectTab != null
             item(key = "title", span = full) {
                 title { if (tabsInTitle && onSelectTab != null) LibraryTabs(tab, layout.gap, onSelectTab, compact = true) }
             }
@@ -499,8 +586,22 @@ private fun Library(
                 // A tap opens the game's page, where it is played from and its settings are; without a
                 // page (the screenshot tests) it launches.
                 val cover = coverOf(game)
-                Tile(game.name, cover, onMenu = { onOpenDetails?.invoke(game) }, onFocused = { focusedArt = cover }) {
+                Tile(game.name, cover, onMenu = { onOpenDetails?.invoke(game) }, onFocused = { focusedArt = cover },
+                    modifier = Modifier.crossFocus(game.appId, installed = true)) {
                     if (onOpenDetails != null) onOpenDetails(game) else onLaunch(game.appId)
+                }
+            }
+            if (uninstalled.isNotEmpty()) {
+                item(key = "uninstalled", span = full) {
+                    Box(Modifier.padding(top = layout.gap)) { LabelDivider("Not installed · ${uninstalled.size}") }
+                }
+                items(uninstalled, key = { "u" + it.appId }) { game ->
+                    val cover = coverOf(game.asGame())
+                    val badge = game.download?.let { "Downloading ${(it.fraction * 100).toInt()}%" }
+                    Tile(game.name, cover, badge = badge, dimmed = true, onMenu = { onOpenDetails?.invoke(game.asGame()) },
+                        onFocused = { focusedArt = cover }, modifier = Modifier.crossFocus("u" + game.appId, installed = false)) {
+                        onOpenDetails?.invoke(game.asGame())
+                    }
                 }
             }
         }
@@ -522,8 +623,11 @@ internal fun Tile(
     title: String,
     cover: Bitmap?,
     badge: String? = null,
+    /** Shown faded: a game that is owned but not installed. */
+    dimmed: Boolean = false,
     onMenu: () -> Unit,
     onFocused: () -> Unit = {},
+    modifier: Modifier = Modifier,
     onClick: () -> Unit,
 ) {
     val interaction = remember { MutableInteractionSource() }
@@ -532,7 +636,7 @@ internal fun Tile(
     LaunchedEffect(focused, cover) { if (focused) latestOnFocused() }
     val shape = AppShapes.tile
     Box(
-        Modifier
+        modifier
             .aspectRatio(2f / 3f)
             .focusHighlight(interaction, shape, scale = 1.07f)
             .clip(shape)
@@ -547,9 +651,9 @@ internal fun Tile(
         contentAlignment = Alignment.Center,
     ) {
         if (cover != null) {
-            Image(cover.asImageBitmap(), title, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+            Image(cover.asImageBitmap(), title, Modifier.fillMaxSize(), contentScale = ContentScale.Crop, alpha = if (dimmed) 0.45f else 1f)
         } else {
-            Text(title, color = AppColors.text, textAlign = TextAlign.Center, modifier = Modifier.padding(8.dp))
+            Text(title, color = if (dimmed) AppColors.textMuted else AppColors.text, textAlign = TextAlign.Center, modifier = Modifier.padding(8.dp))
         }
         if (badge != null) {
             Text(
