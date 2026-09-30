@@ -523,15 +523,15 @@ private fun Library(
         }
         return true
     }
-    fun Modifier.crossFocus(key: String) = focusRequester(tileFocus.getOrPut(key) { FocusRequester() }).onPreviewKeyEvent { e ->
-        val down = when (e.nativeKeyEvent.keyCode) {
-            KeyEvent.KEYCODE_DPAD_DOWN -> true
-            KeyEvent.KEYCODE_DPAD_UP -> false
-            else -> return@onPreviewKeyEvent false
+    fun Modifier.crossFocus(key: String, installed: Boolean) =
+        focusRequester(tileFocus.getOrPut(key) { FocusRequester() }).onPreviewKeyEvent { e ->
+            val down = when (e.nativeKeyEvent.keyCode) {
+                KeyEvent.KEYCODE_DPAD_DOWN -> true
+                KeyEvent.KEYCODE_DPAD_UP -> false
+                else -> return@onPreviewKeyEvent false
+            }
+            down == installed && e.type == KeyEventType.KeyDown && focusAcross(key, down)
         }
-        // Installed tiles cross down, not-installed ones up.
-        if (down == key.startsWith("u")) false else e.type == KeyEventType.KeyDown && focusAcross(key, down)
-    }
     Box(Modifier.fillMaxSize()) {
         Backdrop(focusedArt ?: firstArt, Modifier.fillMaxWidth().fillMaxHeight(0.75f))
         LazyVerticalGrid(
@@ -587,7 +587,7 @@ private fun Library(
                 // page (the screenshot tests) it launches.
                 val cover = coverOf(game)
                 Tile(game.name, cover, onMenu = { onOpenDetails?.invoke(game) }, onFocused = { focusedArt = cover },
-                    modifier = Modifier.crossFocus(game.appId)) {
+                    modifier = Modifier.crossFocus(game.appId, installed = true)) {
                     if (onOpenDetails != null) onOpenDetails(game) else onLaunch(game.appId)
                 }
             }
@@ -599,7 +599,7 @@ private fun Library(
                     val cover = coverOf(game.asGame())
                     val badge = game.download?.let { "Downloading ${(it.fraction * 100).toInt()}%" }
                     Tile(game.name, cover, badge = badge, dimmed = true, onMenu = { onOpenDetails?.invoke(game.asGame()) },
-                        onFocused = { focusedArt = cover }, modifier = Modifier.crossFocus("u" + game.appId)) {
+                        onFocused = { focusedArt = cover }, modifier = Modifier.crossFocus("u" + game.appId, installed = false)) {
                         onOpenDetails?.invoke(game.asGame())
                     }
                 }
