@@ -11,9 +11,13 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.ComposeView
 import android.graphics.Color
 import android.hardware.input.InputManager
+import android.app.GameManager
+import android.app.GameState
+import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.os.PowerManager
 import android.util.Log
 import android.view.Gravity
 import android.view.KeyEvent
@@ -28,6 +32,7 @@ import androidx.compose.ui.graphics.toArgb
 import com.steamoslite.games.GameDetailsReader
 import com.steamoslite.input.Controllers
 import com.steamoslite.input.OnScreenController
+import com.steamoslite.runtime.DisplayDrivers
 import com.steamoslite.runtime.Session
 import com.steamoslite.runtime.Settings
 import com.steamoslite.util.FileUtils
@@ -85,6 +90,7 @@ class SessionActivity : ComponentActivity() {
         // The keyboard slides over the picture; resizing the surface would resize gamescope's output.
         window.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_NOTHING)
         pickHighestRefreshMode()
+        runAsGame()
 
         surface = SurfaceView(this)
         val appId = intent.getStringExtra(EXTRA_APP_ID)
@@ -153,7 +159,7 @@ class SessionActivity : ComponentActivity() {
         val runtimeDir = Session.xdgRuntimeDir(this).apply { mkdirs() }
         // The compositor sends this keymap to wl_keyboard clients so they can read our evdev codes.
         assets.open("wayland/keymap.xkb").use { i -> File(runtimeDir, "keymap.xkb").outputStream().use { i.copyTo(it) } }
-        val driver = bundledDriver()
+        val driver = DisplayDrivers.chosen(this) ?: bundledDriver()
         WaylandCompositor.nativeSetOutputRefreshRate(refreshHz().toFloat())
         WaylandCompositor.nativeSetOutputSize(output.width, output.height)
         WaylandCompositor.nativeStartWithSurface(
@@ -619,6 +625,32 @@ class SessionActivity : ComponentActivity() {
             or View.SYSTEM_UI_FLAG_FULLSCREEN or View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
             or View.SYSTEM_UI_FLAG_LAYOUT_STABLE or View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
             or View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION)
+    }
+
+    /**
+     * Asks Android to run the SoC for a game: sustained performance (a clock floor that does not
+     * fade after a few minutes) and, on Android 13+, GameManager's "in gameplay" state, which some
+     * OEM frameworks read to keep their boost up in menus.
+     */
+    private fun runAsGame() {
+        val parts = mutableListOf<String>()
+        val power = getSystemService(PowerManager::class.java)
+        parts += if (power?.isSustainedPerformanceModeSupported == true) {
+            runCatching { window.setSustainedPerformanceMode(true); "sustained mode on" }.getOrDefault("sustained mode refused")
+        } else "sustained mode unsupported"
+        if (Build.VERSION.SDK_INT >= 31) {
+            val games = getSystemService(GameManager::class.java)
+            parts += "game mode " + when (games?.gameMode) {
+                GameManager.GAME_MODE_PERFORMANCE -> "performance"
+                GameManager.GAME_MODE_BATTERY -> "battery"
+                GameManager.GAME_MODE_STANDARD -> "standard"
+                else -> "unsupported"
+            }
+            if (Build.VERSION.SDK_INT >= 33) {
+                runCatching { games?.setGameState(GameState(false, GameState.MODE_GAMEPLAY_INTERRUPTIBLE)) }
+            }
+        }
+        Log.i(TAG, "perf: " + parts.joinToString(" · "))
     }
 
     /** Asks for Settings' refresh rate (the panel's fastest by default); gamescope and games are told the same. */

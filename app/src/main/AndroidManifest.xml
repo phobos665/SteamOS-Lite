@@ -20,7 +20,10 @@
         android:allowBackup="false"
         android:icon="@drawable/ic_launcher"
         android:label="SteamOS Lite"
+        android:appCategory="game"
+        android:isGame="true"
         android:theme="@android:style/Theme.Material.NoActionBar">
+        <meta-data android:name="android.game_mode_config" android:resource="@xml/game_mode_config" />
 
         <activity
             android:name=".ui.MainActivity"

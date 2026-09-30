@@ -127,7 +127,23 @@ public final class LinuxRuntime {
 
         // Android denies apps these; glibc, Steam and libcap read them at startup.
         File fakeProc = new File(root, "etc/bannerlator/proc");
+        // libpci takes its procfs backend because /proc/bus/pci is readable, then exits the whole
+        // process on the devices file inside it, which is not. Chromium loads libpci in its GPU
+        // process, so the client's interface ends up drawn on the CPU after a few crashes. Nothing
+        // the app can see is on a PCI bus, so an empty list is the truthful answer.
+        File pciDevices = new File(fakeProc, "pci_devices");
+        if (!pciDevices.isFile()) {
+            try {
+                //noinspection ResultOfMethodCallIgnored
+                pciDevices.getParentFile().mkdirs();
+                //noinspection ResultOfMethodCallIgnored
+                pciDevices.createNewFile();
+            } catch (java.io.IOException ignored) {
+                // Not bound below then; the session runs as before.
+            }
+        }
         String[][] procFiles = {
+                {"pci_devices", "/proc/bus/pci/devices"},
                 {"stat", "/proc/stat"},
                 {"version", "/proc/version"},
                 {"loadavg", "/proc/loadavg"},

@@ -3,6 +3,7 @@
 # Frame generation is not built in: framegen_engine_stub.c reports every engine unavailable.
 add_library(bannerwayland SHARED
         src/compositor.c
+        src/adpf.c
         src/vk_present.c
         src/effects_chain.c
         src/vk_loader.c

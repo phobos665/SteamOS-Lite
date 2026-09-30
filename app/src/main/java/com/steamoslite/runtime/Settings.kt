@@ -19,6 +19,10 @@ object Settings {
     private const val STEAM_UPDATES = "steamUpdates"
     private const val PROTON_LOG = "protonLog"
     private const val CLIENT_ALL_CORES = "clientAllCores"
+    private const val CLIENT_TUNING = "clientTuning"
+    private const val NO_XALIA = "noXalia"
+    private const val DECK_MODE = "deckMode"
+    private const val PATCHED_GAMESCOPE = "patchedGamescope"
     private const val KEEP_RUNNING = "keepRunning"
     private const val VKD3D_FEATURE_LEVEL = "vkd3dFeatureLevel"
     private const val VKD3D_SHADER_MODEL = "vkd3dShaderModel"
@@ -126,6 +130,28 @@ object Settings {
     fun clientAllCores(context: Context) = prefs(context).getBoolean(CLIENT_ALL_CORES, true)
 
     fun setClientAllCores(context: Context, on: Boolean) = put(context) { putBoolean(CLIENT_ALL_CORES, on) }
+
+    /** Steam's interface is OpenGL on Zink: lazy descriptors, threaded GL and no GL error checks. */
+    val CLIENT_TUNING_ENV = mapOf("ZINK_DESCRIPTORS" to "lazy", "mesa_glthread" to "true", "MESA_NO_ERROR" to "1")
+
+    fun clientTuning(context: Context) = prefs(context).getBoolean(CLIENT_TUNING, true)
+
+    fun setClientTuning(context: Context, on: Boolean) = put(context) { putBoolean(CLIENT_TUNING, on) }
+
+    /** Proton's xalia helper, which drives game menus with a pad through accessibility; off skips it. */
+    fun noXalia(context: Context) = prefs(context).getBoolean(NO_XALIA, true)
+
+    fun setNoXalia(context: Context, on: Boolean) = put(context) { putBoolean(NO_XALIA, on) }
+
+    /** The patched gamescope the app stages (touch in Big Picture, realtime queues); off runs the runtime's own. */
+    fun patchedGamescope(context: Context) = prefs(context).getBoolean(PATCHED_GAMESCOPE, true)
+
+    fun setPatchedGamescope(context: Context, on: Boolean) = put(context) { putBoolean(PATCHED_GAMESCOPE, on) }
+
+    /** Steam as on a Steam Deck: the Quick Access Menu, battery, NIS scaling and the performance overlay. */
+    fun deckMode(context: Context) = prefs(context).getBoolean(DECK_MODE, false)
+
+    fun setDeckMode(context: Context, on: Boolean) = put(context) { putBoolean(DECK_MODE, on) }
 
     /** Leaving SteamOS keeps it running in the background, so coming back or starting a game skips the boot. */
     fun keepRunning(context: Context) = prefs(context).getBoolean(KEEP_RUNNING, true)

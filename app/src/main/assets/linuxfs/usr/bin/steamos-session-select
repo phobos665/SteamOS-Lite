@@ -1,0 +1,4 @@
+#!/bin/sh
+# What the Steam client calls in Deck mode for "Switch to Desktop". There is no desktop session in
+# this runtime, so the switch is accepted and nothing happens; the client stays where it is.
+exit 0
