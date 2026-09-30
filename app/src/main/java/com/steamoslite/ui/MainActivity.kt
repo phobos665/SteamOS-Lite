@@ -130,7 +130,8 @@ class MainActivity : ComponentActivity() {
                             onPlay = { launch(game.appId) },
                             onPin = if (HomeShortcuts.supported(this)) ({ pin(game) }) else null,
                             onSettings = { settingsFor = game.appId to game.name },
-                            onInstall = { install(game.appId) },
+                            onInstall = { openInSteam("steam://install/${game.appId}") },
+                            onOpenDownloads = { openInSteam("steam://open/downloads") },
                         )
                     }
                     storeGameFor != null -> storeGameFor?.let { game ->
@@ -179,12 +180,12 @@ class MainActivity : ComponentActivity() {
     }
 
     /**
-     * Asks Steam to install [appId]: SteamOS comes to the front (starting if it is not running)
-     * with the request, so Steam's install dialog, or its download page, is on screen.
+     * Hands [url] to Steam (an install, its download page) with SteamOS brought to the front,
+     * starting it if it is not running, so whatever Steam shows for it is on screen.
      */
-    private fun install(appId: String) {
+    private fun openInSteam(url: String) {
         startActivity(Intent(this, SessionActivity::class.java).apply {
-            putExtra(SessionActivity.EXTRA_URL, "steam://install/$appId")
+            putExtra(SessionActivity.EXTRA_URL, url)
             putExtra(SessionActivity.EXTRA_TAPPED_AT, System.currentTimeMillis())
         })
     }

@@ -67,6 +67,7 @@ internal fun GameDetailsRoute(
     onPin: (() -> Unit)?,
     onSettings: (() -> Unit)? = null,
     onInstall: () -> Unit = {},
+    onOpenDownloads: () -> Unit = {},
 ) {
     val context = LocalContext.current
     BackHandler(onBack = onBack)
@@ -88,7 +89,7 @@ internal fun GameDetailsRoute(
         store = withContext(Dispatchers.IO) { StoreDetailsCache.cached(context, game.appId) }
         withContext(Dispatchers.IO) { StoreDetailsCache.load(context, game.appId) }?.let { store = it }
     }
-    GameDetailsScreen(game, details, store, onBack, onPlay, onPin, onSettings, install = install, onInstall = onInstall)
+    GameDetailsScreen(game, details, store, onBack, onPlay, onPin, onSettings, install = install, onInstall = onInstall, onOpenDownloads = onOpenDownloads)
 }
 
 /** Whether a game can be played, is on its way, or has to be installed first. */
@@ -112,6 +113,7 @@ internal fun GameDetailsScreen(
     image: @Composable (source: Any?, maxPx: Int) -> Bitmap? = { source, maxPx -> rememberImage(source, maxPx) },
     install: InstallState = InstallState.Installed,
     onInstall: () -> Unit = {},
+    onOpenDownloads: () -> Unit = {},
 ) {
     BoxWithConstraints(Modifier.fillMaxSize()) {
         val compact = maxHeight < 480.dp
@@ -144,7 +146,7 @@ internal fun GameDetailsScreen(
                                 Text("Install", fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
                             }
                             // Steam's own download page, with pause and resume.
-                            is InstallState.Downloading -> SecondaryButton(onClick = onInstall, modifier = Modifier.focusRequester(play)) {
+                            is InstallState.Downloading -> SecondaryButton(onClick = onOpenDownloads, modifier = Modifier.focusRequester(play)) {
                                 Text("Downloading ${(install.fraction * 100).toInt()}% · Open in SteamOS")
                             }
                         }
