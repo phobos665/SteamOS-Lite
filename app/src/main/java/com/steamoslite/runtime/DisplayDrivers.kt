@@ -10,9 +10,9 @@ import java.util.zip.ZipFile
 
 /**
  * The Android Turnip the app's own compositor puts each frame on the screen with, loaded through
- * adrenotools: the bundled build, or an AdrenoTools zip (meta.json naming the library beside it)
- * downloaded from Banners-Turnip or WinNative. It is loaded once per session process, so a change
- * applies from the next SteamOS start.
+ * adrenotools: the built-in build, one of the builds the APK carries under assets/display_drivers/,
+ * or an AdrenoTools zip (meta.json naming the library beside it) downloaded from Banners-Turnip or
+ * WinNative. It is loaded once per session process, so a change applies from the next SteamOS start.
  */
 object DisplayDrivers {
     private const val SELECTED = "displayDriver"
@@ -20,15 +20,55 @@ object DisplayDrivers {
     /** The driver the APK carries. */
     const val BUNDLED = ""
 
-    data class Installed(val id: String, val name: String)
+    data class Installed(
+        val id: String,
+        val name: String,
+        /** Carried by the APK: always there, not removable. */
+        val bundled: Boolean = false,
+        /** The GPU families it is meant for; empty for any Adreno. */
+        val families: Set<VulkanDrivers.Family> = emptySet(),
+    )
+
+    private const val ASSETS = "display_drivers"
+
+    /** The builds the APK carries, by id (their zip's name under assets/display_drivers/). */
+    private val BUNDLED_FAMILIES = mapOf(
+        "turnip-26.3.0-r3" to setOf(VulkanDrivers.Family.A6XX, VulkanDrivers.Family.A7XX),
+        "turnip-mrpurple-t30" to setOf(VulkanDrivers.Family.A7XX),
+        "turnip-gen8-v34" to setOf(VulkanDrivers.Family.A8XX),
+    )
 
     private fun root(context: Context) = File(context.filesDir, "display_drivers")
 
-    fun installed(context: Context): List<Installed> =
-        root(context).listFiles().orEmpty().filter { libraryOf(it) != null }.map { dir ->
+    fun installed(context: Context): List<Installed> {
+        unpackBundled(context)
+        return root(context).listFiles().orEmpty().filter { libraryOf(it) != null }.map { dir ->
             val meta = runCatching { JSONObject(File(dir, "meta.json").readText()) }.getOrNull()
-            Installed(dir.name, meta?.optString("name")?.takeIf { it.isNotBlank() } ?: dir.name)
-        }.sortedByDescending { it.id }
+            val families = BUNDLED_FAMILIES[dir.name]
+            Installed(dir.name, meta?.optString("name")?.takeIf { it.isNotBlank() } ?: dir.name, families != null, families.orEmpty())
+        }.sortedWith(compareBy({ !it.bundled }, { it.name.lowercase() }))
+    }
+
+    /** Unpacks the APK's builds once per APK version; blocking. */
+    @Synchronized
+    fun unpackBundled(context: Context) {
+        val version = context.packageManager.getPackageInfo(context.packageName, 0).lastUpdateTime.toString()
+        for (asset in context.assets.list(ASSETS).orEmpty().filter { it.endsWith(".zip") }) {
+            val id = asset.removeSuffix(".zip")
+            val marker = File(root(context), "$id/.apk-version")
+            if (marker.isFile && marker.readText() == version) continue
+            val zip = File(context.cacheDir, asset)
+            try {
+                context.assets.open("$ASSETS/$asset").use { input -> zip.outputStream().use { input.copyTo(it) } }
+                unpack(context, zip, id, id)
+                marker.writeText(version)
+            } catch (e: Exception) {
+                android.util.Log.w("DisplayDrivers", "could not unpack the bundled driver $asset", e)
+            } finally {
+                zip.delete()
+            }
+        }
+    }
 
     fun selected(context: Context): String {
         val id = Settings.prefs(context).getString(SELECTED, BUNDLED)!!
@@ -90,7 +130,7 @@ object DisplayDrivers {
     }
 
     fun remove(context: Context, id: String) {
-        require(id.isNotEmpty() && !id.contains('/')) { "not a driver: $id" }
+        require(id.isNotEmpty() && !id.contains('/') && id !in BUNDLED_FAMILIES) { "not a removable driver: $id" }
         if (Settings.prefs(context).getString(SELECTED, BUNDLED) == id) select(context, BUNDLED)
         FileUtils.delete(File(root(context), id))
     }

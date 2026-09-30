@@ -784,7 +784,12 @@ internal fun DisplayDriverChoice(state: SettingsState, onChange: (SettingsChange
         "The Android Turnip that puts each frame on the screen, separate from the one games draw with. " +
             "Change it when the picture stutters or tears; it applies from the next SteamOS start.",
         listOf(DisplayDrivers.BUNDLED) + state.displayDrivers.map { it.id }, state.displayDriver,
-        label = { id -> if (id == DisplayDrivers.BUNDLED) "Built-in" else state.displayDrivers.first { it.id == id }.name },
+        label = { id ->
+            if (id == DisplayDrivers.BUNDLED) "Built-in"
+            else state.displayDrivers.first { it.id == id }.let { d ->
+                d.name + if (state.gpu?.family != null && state.gpu.family in d.families) " (for this GPU)" else ""
+            }
+        },
         extra = {
             for (d in state.displayCatalog.filter { it.id !in installed }) {
                 val progress = state.driverDownload?.takeIf { it.first == d.id }?.second
@@ -793,7 +798,9 @@ internal fun DisplayDriverChoice(state: SettingsState, onChange: (SettingsChange
                 }
             }
             for (d in state.displayDrivers) {
-                if (d.id != state.displayDriver) SecondaryButton(onClick = { onChange(SettingsChange.DisplayDriverRemove(d.id)) }) { Text("Remove ${d.name}") }
+                if (d.id != state.displayDriver && !d.bundled) {
+                    SecondaryButton(onClick = { onChange(SettingsChange.DisplayDriverRemove(d.id)) }) { Text("Remove ${d.name}") }
+                }
             }
         },
     ) { onChange(SettingsChange.DisplayDriver(it)) }
