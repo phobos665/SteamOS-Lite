@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    What Android's GameManager and the OEM game services may do to a session: performance mode is
+    welcome; capping the frame rate and rendering at a lower resolution are refused, since
+    gamescope already owns the output size and pacing.
+-->
+<game-mode-config xmlns:android="http://schemas.android.com/apk/res/android"
+    android:supportsPerformanceGameMode="true"
+    android:supportsBatteryGameMode="true"
+    android:allowGameDownscaling="false"
+    android:allowGameFpsOverride="false" />

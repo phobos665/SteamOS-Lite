@@ -34,6 +34,7 @@ class Session(
     private val root = LinuxRuntime.rootDir(this.context)
     private val pulse = PulseAudio(this.context)
     private val network = NetworkLink(this.context, root)
+    private val battery = BatterySysfs(this.context, File(this.context.cacheDir, "power_supply"))
     private var process: SessionProcess? = null
     private val storeBridge = StoreBridge(this.context)
 
@@ -48,7 +49,11 @@ class Session(
 
     fun start() {
         check(LinuxRuntime.isInstalled(context)) { "The SteamOS runtime is not installed." }
+        OrphanReaper.reap(context)
+        finishAbandonedLogs(context)
         LinuxRuntime.writeAccounts(context)
+        OfflineMode.apply(context)
+        VulkanDrivers.takeFailure(context)?.let { Log.w(TAG, "the Vulkan driver $it crashed Steam last time; back to the runtime's own") }
 
         // Refreshed every session, so what runs is always what this APK carries.
         TarZstd.extractAsset(context, "pulseaudio.tzst", PulseAudio.workingDir(context))
@@ -63,6 +68,7 @@ class Session(
         // This process's Android log: the compositor, adrenotools and Vulkan report there, and its
         // earlier lines (the compositor starts before the session) are in the buffer already.
         startAppLog(File(logs, "app.log"))
+        finishLogsOnCrash(logs)
         val fakeInputDir = fakeInputDir(context).apply { mkdirs() }
         FakeInputWriter.prepareRingSlots(fakeInputDir, 4)
 
@@ -111,6 +117,10 @@ class Session(
         if (Settings.clientAllCores(context)) {
             guest += "BL_CLIENT_CPUS=" + (0 until Runtime.getRuntime().availableProcessors()).joinToString(",")
         }
+        if (Settings.clientTuning(context)) Settings.CLIENT_TUNING_ENV.forEach { (k, v) -> guest += "$k=$v" }
+        if (Settings.noXalia(context)) guest += "PROTON_USE_XALIA=0"
+        if (Settings.deckMode(context)) guest += "BL_STEAMDECK=1"
+        if (!Settings.patchedGamescope(context)) guest += "BL_STOCK_GAMESCOPE=1"
         // Games launched from the client run x86 code under FEX, with Settings' preset
         // (Intermediate by default: without store ordering, multithreaded titles can hang at load).
         Settings.fexPreset(context).env.forEach { (k, v) -> guest += "$k=$v" }
@@ -146,6 +156,8 @@ class Session(
         appId?.let { guest += "steam://rungameid/$it" }
 
         val binds = mutableListOf(fakeInputDir.path + ":/dev/input")
+        battery.write()
+        binds += battery.dir.path + ":/sys/class/power_supply"
         // The SD card's library: the scripts register /mnt/bannerlator-sd with the client as its
         // "SD Card" library folder, but nothing was bound there, so it never appeared.
         sdLibrary(context)?.let {
@@ -175,6 +187,7 @@ class Session(
         network.publish()
         network.start()
         pulse.start()
+        battery.start()
         mark("network link and audio started")
         process = SessionProcess(command, hostEnv, root, File(logs, "proot.log")) { status ->
             Log.i(TAG, "session ended: $status")
@@ -195,8 +208,21 @@ class Session(
         storeBridge.stop()
         network.stop()
         pulse.stop()
+        battery.stop()
         logDir?.let { collectLogs(it) }
         stopAppLog()
+    }
+
+    /** A crash in this process still leaves a finished log folder, with the exception in it. */
+    private fun finishLogsOnCrash(dir: File) {
+        val previous = Thread.getDefaultUncaughtExceptionHandler()
+        Thread.setDefaultUncaughtExceptionHandler { thread, e ->
+            runCatching {
+                File(dir, "crash-app.txt").writeText("Thread ${thread.name}\n" + Log.getStackTraceString(e))
+                collectLogs(dir)
+            }
+            previous?.uncaughtException(thread, e)
+        }
     }
 
     private var appLog: Process? = null
@@ -285,6 +311,36 @@ class Session(
         fun latestLogDir(context: Context): File? =
             logRoots(context).flatMap { it.listFiles()?.filter(File::isDirectory).orEmpty() }.maxByOrNull { it.lastModified() }
 
+        /**
+         * Log folders of sessions that ended without their teardown (the process was killed, or
+         * died natively) get Android's crash buffer and Steam's logs, which still hold that
+         * session's tail since nothing has run since.
+         */
+        private fun finishAbandonedLogs(context: Context) {
+            val root = LinuxRuntime.rootDir(context)
+            for (dir in logRoots(context).flatMap { it.listFiles()?.filter(File::isDirectory).orEmpty() }) {
+                if (File(dir, ".collected").exists()) continue
+                runCatching {
+                    val crash = ProcessBuilder("/system/bin/logcat", "-b", "crash", "-d", "-v", "threadtime")
+                        .redirectErrorStream(true).start()
+                    val text = crash.inputStream.bufferedReader().readText()
+                    crash.waitFor()
+                    File(dir, "ended-without-teardown.txt").writeText(
+                        "This session ended without its teardown: the app was killed or crashed natively.\n\n" +
+                            "Android's crash buffer:\n" + text.ifBlank { "(empty)\n" },
+                    )
+                    val out = File(dir, "steam")
+                    File(root, "root/.local/share/Steam/logs").listFiles()
+                        ?.filter { it.isFile && it.name != "connection_log.txt" }?.forEach { src ->
+                            out.mkdirs()
+                            File(out, src.name).writeText(src.readLines().takeLast(3000).joinToString("\n", postfix = "\n"))
+                        }
+                    File(dir, ".collected").createNewFile()
+                    Log.i(TAG, "finished the abandoned log folder $dir")
+                }.onFailure { Log.w(TAG, "could not finish $dir", it) }
+            }
+        }
+
         private fun openLogDir(context: Context): File {
             val stamp = SimpleDateFormat("yyyy-MM-dd_HH-mm-ss", Locale.US).format(Date())
             for (root in logRoots(context)) {
@@ -303,7 +359,15 @@ class Session(
             "session", "steam-install", "steam-compat", "steam-library",
             "seed-redists", "netmanager", "proton-extra", "steam-shortcuts",
         ).map { "usr/local/bin/bannerlator-$it" }.map { it to it } +
-            listOf("usr/local/bin/bl-store-launch").map { it to it }
+            listOf("usr/local/bin/bl-store-launch").map { it to it } +
+            // Deck mode: the SteamOS helpers the client calls, as no-op stubs, and Valve's mangoapp
+            // with the libraries the runtime lacks (the build stages those; a local build has none).
+            (listOf("steamos-update", "steamos-select-branch", "steamos-session-select", "jupiter-biosupdate").map { "usr/bin/$it" } +
+                listOf("steamos-priv-write", "steamos-set-timezone", "steamos-update", "steamos-select-branch", "jupiter-biosupdate", "jupiter-dock-updater")
+                    .map { "usr/bin/steamos-polkit-helpers/$it" } +
+                listOf("usr/local/bin/mangoapp", "usr/local/bin/gamescope") +
+                listOf("mangoapp", "libfmt.so.10", "libspdlog.so.1.13", "libglfw.so.3", "libtraceevent.so.1", "libtracefs.so.1")
+                    .map { "usr/local/lib/mangoapp/$it" }).map { it to it }
 
         const val SD_GUEST_PATH = "/mnt/bannerlator-sd"
 

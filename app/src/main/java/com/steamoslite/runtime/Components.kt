@@ -3,6 +3,8 @@ package com.steamoslite.runtime
 import android.content.Context
 import android.net.Uri
 import com.steamoslite.util.FileUtils
+import com.steamoslite.util.Hashes
+import com.steamoslite.util.ResumableDownload
 import com.steamoslite.util.TarZstd
 import java.io.File
 
@@ -68,7 +70,29 @@ abstract class ComponentStore(val kind: String) {
     fun looksLikePackage(name: String) = IMPORTABLE.containsMatchIn(name)
 
     /** Unpacks a package the user picked; returns the version it is listed as (its file name). */
-    fun import(context: Context, uri: Uri, name: String): String {
+    fun import(context: Context, uri: Uri, name: String): String =
+        context.contentResolver.openInputStream(uri)!!.use { importStream(it, context, name) }
+
+    /** Downloads a Nightlies package, checks it against GitHub's digest and imports it. */
+    fun download(context: Context, item: Nightlies.Item, onProgress: (Float) -> Unit): String {
+        val file = File(context.cacheDir, item.file)
+        try {
+            val done = ResumableDownload(item.url, file, item.size).run(object : ResumableDownload.Listener {
+                override fun onProgress(done: Long, total: Long) {
+                    if (total > 0) onProgress(done.toFloat() / total)
+                }
+
+                override fun onRetry(attempt: Int, delayMs: Long, reason: String) {}
+            }) { false }
+            check(done) { "the download did not finish" }
+            item.sha256?.let { check(Hashes.sha256(file).equals(it, true)) { "the download does not match its checksum" } }
+            return file.inputStream().use { importStream(it, context, item.file) }
+        } finally {
+            file.delete()
+        }
+    }
+
+    private fun importStream(input: java.io.InputStream, context: Context, name: String): String {
         // "FEXCore-2609.wcp", "fexcore-2605.tzst", "FEX-2508.wcp" and "dxvk-2.7.1.tzst" all list by
         // their version alone.
         val version = name.replace(IMPORTABLE, "")
@@ -78,7 +102,7 @@ abstract class ComponentStore(val kind: String) {
         val staging = File(root, ".import")
         FileUtils.delete(staging)
         try {
-            context.contentResolver.openInputStream(uri)!!.use { TarZstd.extract(it, staging) }
+            TarZstd.extract(input, staging)
             val dir = File(root, version)
             FileUtils.delete(dir)
             keep(staging, dir)
@@ -102,7 +126,8 @@ abstract class ComponentStore(val kind: String) {
         private val IMPORTABLE = Regex("""\.(tzst|tar\.zst|wcp)$""", RegexOption.IGNORE_CASE)
 
         /** A real file of a package, not one of the macOS "._" resource forks some carry. */
-        fun isPayload(file: File) = file.isFile && !file.name.startsWith("._") && file.name.endsWith(".dll", true)
+        fun isPayload(file: File) = file.isFile && !file.name.startsWith("._") &&
+            (file.name.endsWith(".dll", true) || file.name.endsWith(".so"))
     }
 }
 
@@ -113,13 +138,15 @@ abstract class ComponentStore(val kind: String) {
  */
 object FexCore : ComponentStore("fexcore") {
     val DLLS = listOf("libarm64ecfex.dll", "libwow64fex.dll")
+    /** FEX 2607 and newer split each into the DLL and a unix library Proton loads beside Wine. */
+    private val UNIX_LIBS = listOf("libarm64ecfex.so", "libwow64fex.so")
 
     override fun isComplete(dir: File) = DLLS.all { File(dir, it).isFile }
 
     /** The two DLLs, wherever the package keeps them (a .wcp nests them in system32/). */
     override fun keep(unpacked: File, dir: File) {
-        val found = unpacked.walkTopDown().filter { isPayload(it) && it.name in DLLS }.associateBy { it.name }
-        val missing = DLLS - found.keys
+        val found = unpacked.walkTopDown().filter { isPayload(it) && (it.name in DLLS || it.name in UNIX_LIBS) }.associateBy { it.name }
+        val missing = DLLS - found.keys.toSet()
         require(missing.isEmpty()) { "not a FEXCore package: no " + missing.joinToString(" or ") }
         dir.mkdirs()
         found.values.forEach { it.copyTo(File(dir, it.name), overwrite = true) }
@@ -133,18 +160,19 @@ object FexCore : ComponentStore("fexcore") {
  * Packages keep 64-bit DLLs in system32/ and 32-bit ones in syswow64/, the layout kept here.
  */
 abstract class TranslationLayer(kind: String, private val probe: String) : ComponentStore(kind) {
-    private val arches = listOf("system32", "syswow64")
+    /** GameNative's packages keep system32/syswow64; Nightlies' "-Linux" ones Proton's own arch folders. */
+    private fun isArchDir(dir: File) = dir.isDirectory &&
+        (dir.name == "system32" || dir.name == "syswow64" || dir.name.endsWith("-windows"))
 
-    override fun isComplete(dir: File) = File(dir, "system32/$probe").isFile
+    override fun isComplete(dir: File) =
+        dir.listFiles().orEmpty().any { isArchDir(it) && it.name != "syswow64" && !it.name.startsWith("i386") && File(it, probe).isFile }
 
     override fun keep(unpacked: File, dir: File) {
         val base = unpacked.walkTopDown()
-            .firstOrNull { it.isDirectory && it.name == "system32" && File(it, probe).isFile }?.parentFile
-        requireNotNull(base) { "not a $kind package: no system32/$probe" }
-        for (arch in arches) {
-            val from = File(base, arch)
-            if (!from.isDirectory) continue
-            val to = File(dir, arch).apply { mkdirs() }
+            .firstOrNull { isArchDir(it) && it.name != "syswow64" && !it.name.startsWith("i386") && File(it, probe).isFile }?.parentFile
+        requireNotNull(base) { "not a $kind package: no $probe" }
+        for (from in base.listFiles().orEmpty().filter { isArchDir(it) }) {
+            val to = File(dir, from.name).apply { mkdirs() }
             from.listFiles().orEmpty().filter { isPayload(it) }.forEach { it.copyTo(File(to, it.name), overwrite = true) }
         }
     }

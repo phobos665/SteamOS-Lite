@@ -1,0 +1,45 @@
+name: gamescope (patched)
+
+# The runtime's own gamescope (Arch Linux ARM's 3.16.29 package) rebuilt with linux/gamescope/patches
+# in an Arch Linux ARM container on an arm64 runner. Published as a release tagged by a hash of
+# linux/gamescope, which the APK build fetches when it exists; the runtime image is never changed.
+on:
+  push:
+    paths:
+      - 'linux/gamescope/**'
+      - '.github/workflows/gamescope.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - name: Release tag
+        id: tag
+        run: echo "tag=gamescope-3.16.29-$(find linux/gamescope -type f | sort | xargs cat | sha256sum | cut -c1-12)" >> "$GITHUB_OUTPUT"
+      - name: Build in Arch Linux ARM
+        run: |
+          set -euo pipefail
+          docker run --rm -v "$PWD:/work" -w /work menci/archlinuxarm:base-devel bash linux/gamescope/build-in-arch.sh
+          sudo chown -R "$(id -u):$(id -g)" .
+      - uses: actions/upload-artifact@v4
+        with:
+          name: gamescope-patched
+          path: |
+            gamescope.tzst
+            gamescope.tzst.sha256
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag=${{ steps.tag.outputs.tag }}
+          if gh release view "$tag" >/dev/null 2>&1; then echo "$tag exists"; exit 0; fi
+          gh release create "$tag" --title "$tag" --target "$GITHUB_SHA" \
+            --notes "gamescope 3.16.29 with linux/gamescope/patches, staged by the APK over /usr/local/bin/gamescope. sha256 $(cut -d' ' -f1 gamescope.tzst.sha256)" \
+            gamescope.tzst gamescope.tzst.sha256

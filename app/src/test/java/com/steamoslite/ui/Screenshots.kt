@@ -135,9 +135,7 @@ class Screenshots {
                     gpu = com.steamoslite.runtime.VulkanDrivers.Gpu("Adreno 740", com.steamoslite.runtime.VulkanDrivers.Family.A7XX),
                     drivers = listOf(driver),
                     driver = driver.id,
-                    driverCatalog = listOf("a6xx", "a8xx").map {
-                        com.steamoslite.runtime.VulkanDrivers.CatalogDriver("Turnip-26.3.0-devel-4cf0989083-$it-Linux", "26.3.0-devel-4cf0989083", it, "", 0)
-                    },
+                    driverCatalog = listOf(catalogDriver("a8xx")),
                 ),
                 onBack = {},
             ) {}
@@ -154,9 +152,10 @@ class Screenshots {
                         gpu = com.steamoslite.runtime.VulkanDrivers.Gpu("Adreno 740", com.steamoslite.runtime.VulkanDrivers.Family.A7XX),
                         drivers = listOf(driver),
                         driver = driver.id,
-                        driverCatalog = listOf("a6xx", "a8xx").map {
-                            com.steamoslite.runtime.VulkanDrivers.CatalogDriver("Turnip-26.3.0-devel-0203514513-$it-Linux", "26.3.0-devel-0203514513", it, "", 0)
-                        } + com.steamoslite.runtime.VulkanDrivers.CatalogDriver("Turnip-26.4.0-devel-1111111111-a7xx-Linux", "26.4.0-devel-1111111111", "a7xx", "", 0),
+                        driverCatalog = listOf(catalogDriver("a7xx", "26.4.0"), catalogDriver("a6xx"), catalogDriver("a8xx")) +
+                            com.steamoslite.runtime.TurnipReleases.Asset(
+                                "WinNative", "WN-Linux-Turnip-1.4-p_Axxx.zip", "", 0, "", true, "WinNative 1.4 · Performance", emptySet(),
+                            ),
                     ),
                 ) {}
             }
@@ -177,6 +176,11 @@ class Screenshots {
             }
         }
     }
+
+    private fun catalogDriver(variant: String, version: String = "26.3.0") = com.steamoslite.runtime.TurnipReleases.Asset(
+        "SteamOS Lite", "Turnip-$version-devel-0203514513-$variant-Linux.zip", "", 0, "", true, "Turnip $version $variant",
+        com.steamoslite.runtime.VulkanDrivers.Family.entries.filter { it.variant == variant }.toSet(),
+    )
 
     private val driver = com.steamoslite.runtime.VulkanDrivers.Installed(
         "Turnip-26.3.0-devel-4cf0989083-a7xx-Linux", "Turnip 26.3.0-devel (a7xx)", "a7xx", "1.4.363", java.io.File("icd.json"),

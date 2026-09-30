@@ -1,0 +1,6 @@
+#!/bin/sh
+# gamescope --mangoapp runs `mangoapp` from PATH: Valve's build, beside the libraries the runtime
+# lacks. It opens its window through GLFW's X11 API; with XDG_SESSION_TYPE=wayland GLFW would look
+# for the app's own compositor instead of gamescope's X server.
+export XDG_SESSION_TYPE=x11
+LD_LIBRARY_PATH=/usr/local/lib/mangoapp${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH} exec /usr/local/lib/mangoapp/mangoapp "$@"

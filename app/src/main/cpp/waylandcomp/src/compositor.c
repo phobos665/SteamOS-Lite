@@ -36,6 +36,7 @@
 #include <android/log.h>
 #include <wayland-server.h>
 
+#include "adpf.h"
 #include "xdg-shell-server-protocol.h"
 #include "linux-dmabuf-v1-server-protocol.h"
 #include "sc_layer.h"
@@ -2489,7 +2490,10 @@ static void render_scene(void) {
 
 static int on_fallback_timer(void *data) {
     g_fallback_armed = 0;
-    if (g_dirty) render_scene();
+    if (g_dirty) {
+        render_scene();
+        adpf_frame(g_refresh_ns);
+    }
     return 0;
 }
 
@@ -2522,7 +2526,10 @@ static void on_vsync(int64_t frame_time_ns) {
     if (vkp_apply_window_request()) g_dirty = 1;
     /* A screen-effect setting changed (JNI, any thread): redraw so it shows on a static scene too. */
     if (vkp_effects_sync()) g_dirty = 1;
-    if (g_dirty) render_scene();
+    if (g_dirty) {
+        render_scene();
+        adpf_frame(g_refresh_ns);
+    }
 }
 
 /* ------------------------------------------------------------------ wl_seat */

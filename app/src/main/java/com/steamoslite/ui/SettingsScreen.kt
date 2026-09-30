@@ -1,5 +1,6 @@
 package com.steamoslite.ui
 
+import android.content.Context
 import android.net.Uri
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -17,6 +18,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -34,11 +36,16 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.steamoslite.frontend.FrontendExport
 import com.steamoslite.runtime.ComponentStore
+import com.steamoslite.runtime.DeckyLoader
+import com.steamoslite.runtime.DisplayDrivers
 import com.steamoslite.runtime.Dxvk
 import com.steamoslite.runtime.FexCore
+import com.steamoslite.runtime.Nightlies
+import com.steamoslite.runtime.OfflineMode
 import com.steamoslite.runtime.Protons
 import com.steamoslite.runtime.Settings
 import com.steamoslite.runtime.SteamShortcuts
+import com.steamoslite.runtime.TurnipReleases
 import com.steamoslite.runtime.VulkanDrivers
 import com.steamoslite.runtime.Vkd3d
 import kotlinx.coroutines.Dispatchers
@@ -77,10 +84,23 @@ internal data class SettingsState(
     val clientAllCores: Boolean = true,
     val keepRunning: Boolean = true,
     val onScreen: Boolean = false,
+    /** Nightlies builds per component, once asked for (null until then). */
+    val nightlies: Map<ComponentStore, List<Nightlies.Item>> = emptyMap(),
+    /** The component package being downloaded and how far it is. */
+    val componentDownload: Pair<String, Float>? = null,
+    /** The installed Decky Loader version, or null. */
+    val decky: String? = null,
+    val deckyEnabled: Boolean = false,
+    /** How far a Decky Loader download is, while one runs. */
+    val deckyDownload: Float? = null,
+    val flags: Map<SettingFlag, Boolean> = SettingFlag.entries.associateWith { it.default },
     val gpu: VulkanDrivers.Gpu? = null,
     val drivers: List<VulkanDrivers.Installed> = emptyList(),
     val driver: String = VulkanDrivers.RUNTIME,
-    val driverCatalog: List<VulkanDrivers.CatalogDriver> = emptyList(),
+    val driverCatalog: List<TurnipReleases.Asset> = emptyList(),
+    val displayDrivers: List<DisplayDrivers.Installed> = emptyList(),
+    val displayDriver: String = DisplayDrivers.BUNDLED,
+    val displayCatalog: List<TurnipReleases.Asset> = emptyList(),
     /** The driver being downloaded and how far it is. */
     val driverDownload: Pair<String, Float>? = null,
     /** The frontend shortcut folder, or null when exporting is off. */
@@ -107,11 +127,20 @@ internal sealed interface SettingsChange {
     data class CompatFlags(val on: Boolean) : SettingsChange
     data class ProtonLog(val on: Boolean) : SettingsChange
     data class ClientAllCores(val on: Boolean) : SettingsChange
+    data class Flag(val flag: SettingFlag, val on: Boolean) : SettingsChange
+    data object DeckyInstall : SettingsChange
+    data class DeckyEnabled(val on: Boolean) : SettingsChange
+    data object DeckyUninstall : SettingsChange
+    data class LoadNightlies(val store: ComponentStore) : SettingsChange
+    data class NightlyInstall(val store: ComponentStore, val item: Nightlies.Item) : SettingsChange
     data class KeepRunning(val on: Boolean) : SettingsChange
     data class OnScreen(val on: Boolean) : SettingsChange
     data class Driver(val id: String) : SettingsChange
-    data class DriverInstall(val driver: VulkanDrivers.CatalogDriver) : SettingsChange
+    data class DriverInstall(val driver: TurnipReleases.Asset) : SettingsChange
     data class DriverRemove(val id: String) : SettingsChange
+    data class DisplayDriver(val id: String) : SettingsChange
+    data class DisplayDriverInstall(val driver: TurnipReleases.Asset) : SettingsChange
+    data class DisplayDriverRemove(val id: String) : SettingsChange
     /** Opens the folder picker for frontend shortcuts. */
     data object FrontendPick : SettingsChange
     data class FrontendDir(val path: String?) : SettingsChange
@@ -152,15 +181,25 @@ internal fun SettingsRoute(onBack: () -> Unit) {
                 onScreen = Settings.onScreenController(context),
                 frontendDir = FrontendExport.dir(context)?.path,
                 shortcutTest = SteamShortcuts.testEnabled(context),
+                flags = SettingFlag.entries.associateWith { it.get(context) },
+                decky = DeckyLoader.installed(context),
+                deckyEnabled = DeckyLoader.enabled(context),
                 gpu = VulkanDrivers.gpu(),
                 drivers = VulkanDrivers.installed(context),
                 driver = VulkanDrivers.selected(context),
+                displayDrivers = DisplayDrivers.installed(context),
+                displayDriver = DisplayDrivers.selected(context),
             )
         }
     }
     LaunchedEffect(Unit) {
+        val failed = withContext(Dispatchers.IO) { VulkanDrivers.takeFailure(context) }
         reload()
-        state = state.copy(driverCatalog = withContext(Dispatchers.IO) { VulkanDrivers.catalog() })
+        if (failed != null) {
+            state = state.copy(message = "$failed crashed Steam as it started, so SteamOS went back to the built-in Turnip. Try another build.")
+        }
+        val releases = withContext(Dispatchers.IO) { TurnipReleases.fetch() }
+        state = state.copy(driverCatalog = releases.filter { it.linux }, displayCatalog = releases.filter { !it.linux })
     }
 
     // The component a package is being picked for; the picker's result has no room for it.
@@ -221,6 +260,80 @@ internal fun SettingsRoute(onBack: () -> Unit) {
             }
             return@SettingsScreen
         }
+        if (change is SettingsChange.DeckyInstall) {
+            if (state.deckyDownload != null) return@SettingsScreen
+            state = state.copy(deckyDownload = 0f, message = null)
+            scope.launch {
+                val result = withContext(Dispatchers.IO) {
+                    runCatching {
+                        val release = DeckyLoader.latest() ?: error("no release could be found")
+                        DeckyLoader.install(context, release) { f -> scope.launch { if (state.deckyDownload != null) state = state.copy(deckyDownload = f) } }
+                        DeckyLoader.setEnabled(context, true)
+                        release.tag
+                    }
+                }
+                state = state.copy(
+                    deckyDownload = null,
+                    message = result.fold({ "Decky Loader $it installed. It starts with SteamOS; open it from Steam's Quick Access Menu." },
+                        { "Could not install Decky Loader: ${it.message}" }),
+                )
+                reload()
+            }
+            return@SettingsScreen
+        }
+        if (change is SettingsChange.LoadNightlies) {
+            scope.launch {
+                val items = withContext(Dispatchers.IO) { Nightlies.catalog(change.store) }
+                state = state.copy(
+                    nightlies = state.nightlies + (change.store to items),
+                    message = if (items.isEmpty()) "Could not reach the Nightlies releases; try again later." else null,
+                )
+            }
+            return@SettingsScreen
+        }
+        if (change is SettingsChange.NightlyInstall) {
+            if (state.componentDownload != null) return@SettingsScreen
+            val item = change.item
+            state = state.copy(componentDownload = item.file to 0f, message = null)
+            scope.launch {
+                val result = withContext(Dispatchers.IO) {
+                    runCatching {
+                        change.store.download(context, item) { f ->
+                            scope.launch { if (state.componentDownload?.first == item.file) state = state.copy(componentDownload = item.file to f) }
+                        }
+                    }
+                }
+                state = state.copy(
+                    componentDownload = null,
+                    message = result.fold(
+                        { componentLabel(change.store, it) + " downloaded. Choose it above to use it." },
+                        { "Could not install ${item.file}: ${it.message}" },
+                    ),
+                )
+                reload()
+            }
+            return@SettingsScreen
+        }
+        if (change is SettingsChange.DisplayDriverInstall) {
+            if (state.driverDownload != null) return@SettingsScreen
+            val driver = change.driver
+            state = state.copy(driverDownload = driver.id to 0f, message = null)
+            scope.launch {
+                val result = withContext(Dispatchers.IO) {
+                    runCatching {
+                        DisplayDrivers.install(context, driver) { f -> scope.launch { if (state.driverDownload?.first == driver.id) state = state.copy(driverDownload = driver.id to f) } }
+                        DisplayDrivers.select(context, driver.id)
+                    }
+                }
+                state = state.copy(
+                    driverDownload = null,
+                    message = result.fold({ "${driver.label} installed and chosen for the display; it applies from the next SteamOS start." },
+                        { "Could not install the driver: ${it.message}" }),
+                )
+                reload()
+            }
+            return@SettingsScreen
+        }
         if (change is SettingsChange.DriverInstall) {
             if (state.driverDownload != null) return@SettingsScreen
             val driver = change.driver
@@ -234,7 +347,7 @@ internal fun SettingsRoute(onBack: () -> Unit) {
                 }
                 state = state.copy(
                     driverDownload = null,
-                    message = result.fold({ "${driverLabel(driver)} installed and chosen." }, { "Could not install the driver: ${it.message}" }),
+                    message = result.fold({ "${driver.label} installed and chosen." }, { "Could not install the driver: ${it.message}" }),
                 )
                 reload()
             }
@@ -263,12 +376,17 @@ internal fun SettingsRoute(onBack: () -> Unit) {
                     is SettingsChange.CompatFlags -> Settings.setCompatFlags(context, change.on)
                     is SettingsChange.ProtonLog -> Settings.setProtonLog(context, change.on)
                     is SettingsChange.ClientAllCores -> Settings.setClientAllCores(context, change.on)
+                    is SettingsChange.Flag -> change.flag.set(context, change.on)
+                    is SettingsChange.DeckyEnabled -> DeckyLoader.setEnabled(context, change.on)
+                    SettingsChange.DeckyUninstall -> DeckyLoader.uninstall(context)
                     is SettingsChange.KeepRunning -> Settings.setKeepRunning(context, change.on)
                     is SettingsChange.OnScreen -> Settings.setOnScreenController(context, change.on)
                     is SettingsChange.ShortcutTest -> SteamShortcuts.setTest(context, change.on)
                     is SettingsChange.Driver -> VulkanDrivers.select(context, change.id)
                     is SettingsChange.DriverRemove -> VulkanDrivers.remove(context, change.id)
-                    is SettingsChange.Import, is SettingsChange.DriverInstall, SettingsChange.FrontendPick, SettingsChange.FrontendExportNow,
+                    is SettingsChange.DisplayDriver -> DisplayDrivers.select(context, change.id)
+                    is SettingsChange.DisplayDriverRemove -> DisplayDrivers.remove(context, change.id)
+                    is SettingsChange.Import, is SettingsChange.DriverInstall, is SettingsChange.DisplayDriverInstall, is SettingsChange.LoadNightlies, is SettingsChange.NightlyInstall, SettingsChange.DeckyInstall, SettingsChange.FrontendPick, SettingsChange.FrontendExportNow,
                     is SettingsChange.FrontendDir -> {}
                 }
             }
@@ -324,6 +442,7 @@ internal fun SettingsScreen(state: SettingsState, onBack: () -> Unit, onChange: 
 
         item { Section("Graphics") }
         item { DriverChoice(state, onChange) }
+        item { DisplayDriverChoice(state, onChange) }
 
         item { Section("Emulation") }
         item {
@@ -356,15 +475,15 @@ internal fun SettingsScreen(state: SettingsState, onBack: () -> Unit, onChange: 
                 FexCore, state.fex,
                 "The x86 emulator for games' Windows code. Swapped into each game's prefix from its " +
                     "second start. For one game: BL_FEXCORE=2605 %command%.",
-                onChange,
+                state, onChange,
             )
         }
         item {
             ComponentChoice(
                 Dxvk, state.dxvk,
-                "Direct3D 8-11 on Vulkan. The bundled versions are GameNative's x86-64 builds, which run " +
-                    "under FEXCore: try them when a game draws wrong. For one game: BL_DXVK=2.6.1-gplasync %command%.",
-                onChange,
+                "Direct3D 8-11 on Vulkan. The bundled versions are x86-64 builds that run under FEXCore; the " +
+                    "ARM64EC nightly builds run natively. For one game: BL_DXVK=2.6.1-gplasync %command%.",
+                state, onChange,
             )
         }
 
@@ -372,7 +491,7 @@ internal fun SettingsScreen(state: SettingsState, onBack: () -> Unit, onChange: 
             Toggle(
                 "Crash-safety flags",
                 "The settings Android Proton builds run games with to avoid known crashes: Turnip's " +
-                    "noconform mode, esync, a larger shader cache and DXVK's async compilation.",
+                    "noconform mode, esync, a larger shader cache and DXVK's async compilation (async builds only).",
                 state.compatFlags,
             ) { onChange(SettingsChange.CompatFlags(it)) }
         }
@@ -383,7 +502,7 @@ internal fun SettingsScreen(state: SettingsState, onBack: () -> Unit, onChange: 
                 Vkd3d, state.vkd3d,
                 "VKD3D-Proton, Direct3D 12 on Vulkan. The bundled versions are x86-64 builds that run under " +
                     "FEXCore; try one when a DX12 game crashes or draws wrong.",
-                onChange,
+                state, onChange,
             )
         }
         item {
@@ -426,6 +545,10 @@ internal fun SettingsScreen(state: SettingsState, onBack: () -> Unit, onChange: 
                 state.clientAllCores,
             ) { onChange(SettingsChange.ClientAllCores(it)) }
         }
+        items(SettingFlag.entries.filter { it.section == "Steam" }) { flag ->
+            Toggle(flag.title, flag.detail, state.flags[flag] ?: flag.default) { onChange(SettingsChange.Flag(flag, it)) }
+        }
+        item { DeckyCard(state, onChange) }
 
         item { Section("Frontends") }
         item {
@@ -576,14 +699,28 @@ private fun Toggle(title: String, detail: String, on: Boolean, onChange: (Boolea
 
 /** FEXCore or DXVK: Proton's own or a version, newest first, plus import and removing imports. */
 @Composable
-private fun ComponentChoice(store: ComponentStore, pick: ComponentPick, detail: String, onChange: (SettingsChange) -> Unit) {
+private fun ComponentChoice(store: ComponentStore, pick: ComponentPick, detail: String, state: SettingsState, onChange: (SettingsChange) -> Unit) {
     val name = componentName(store)
+    val nightlies = state.nightlies[store]
     Choice(
         "$name version", detail,
         listOf(ComponentStore.PROTONS_OWN) + pick.versions.reversed(), pick.selected,
         label = { if (it == ComponentStore.PROTONS_OWN) "Proton's own" else it + if (it in pick.imported) " (imported)" else "" },
         extra = {
             SecondaryButton(onClick = { onChange(SettingsChange.Import(store)) }) { Text("Import…") }
+            if (nightlies == null) {
+                SecondaryButton(onClick = { onChange(SettingsChange.LoadNightlies(store)) }) { Text("Nightly builds…") }
+            } else {
+                for (item in nightlies) {
+                    val progress = state.componentDownload?.takeIf { it.first == item.file }?.second
+                    SecondaryButton(onClick = { onChange(SettingsChange.NightlyInstall(store, item)) }) {
+                        Text(
+                            if (progress != null) "Downloading ${(progress * 100).toInt()}%"
+                            else "Get " + item.file.removeSuffix(".wcp") + if (item.arm64ec) " (ARM64EC)" else "",
+                        )
+                    }
+                }
+            }
             for (version in pick.imported) {
                 if (version != pick.selected) {
                     SecondaryButton(onClick = { onChange(SettingsChange.Remove(store, version)) }) { Text("Remove $version") }
@@ -601,12 +738,14 @@ private fun ComponentChoice(store: ComponentStore, pick: ComponentPick, detail: 
 internal fun DriverChoice(state: SettingsState, onChange: (SettingsChange) -> Unit) {
     val family = state.gpu?.family
     val installed = state.drivers.map { it.id }.toSet()
-    val offered = state.driverCatalog.filter { it.id !in installed }.sortedBy { if (it.family == family) 0 else 1 }
+    fun recommended(d: TurnipReleases.Asset) = family != null && family in d.families
+    val offered = state.driverCatalog.filter { it.id !in installed }.sortedBy { if (recommended(it)) 0 else 1 }
     Choice(
         "Vulkan driver",
         (state.gpu?.let { "This device: ${it.name}" + (it.family?.let { f -> " (${f.variant} builds)" } ?: "") + ". " } ?: "") +
-            "What Steam, gamescope and every game draw with. Newer Turnip builds can run games faster or fix " +
-            "rendering; if one misbehaves, go back to the built-in one. A game's own settings can pick another.",
+            "What Steam, gamescope and every game draw with. The built-in Turnip is the tested one; the downloads " +
+            "are development builds that can run games faster or fix rendering, or fail to start Steam, in which case " +
+            "the session falls back to the built-in one. A game's own settings can pick another.",
         listOf(VulkanDrivers.RUNTIME) + state.drivers.map { it.id }, state.driver,
         label = { id ->
             if (id == VulkanDrivers.RUNTIME) "Built-in Turnip"
@@ -618,7 +757,7 @@ internal fun DriverChoice(state: SettingsState, onChange: (SettingsChange) -> Un
                 SecondaryButton(onClick = { onChange(SettingsChange.DriverInstall(d)) }) {
                     Text(
                         if (progress != null) "Downloading ${(progress * 100).toInt()}%"
-                        else "Download ${driverLabel(d)}" + if (d.family == family) " (recommended)" else "",
+                        else "Download ${d.label}" + if (recommended(d)) " (for this GPU)" else "",
                     )
                 }
             }
@@ -629,10 +768,103 @@ internal fun DriverChoice(state: SettingsState, onChange: (SettingsChange) -> Un
     ) { onChange(SettingsChange.Driver(it)) }
 }
 
-internal fun driverLabel(d: VulkanDrivers.CatalogDriver) = "Turnip ${d.version.substringBefore('-')} ${d.variant}"
 
 private fun exportMessage(count: Int?, dir: String?) = when {
     count == null -> "Could not write to ${dir ?: "the folder"}. Allow SteamOS Lite storage access, or pick another folder."
     count == 1 -> "1 game exported to $dir."
     else -> "$count games exported to $dir."
+}
+
+/** The Android driver the app's compositor draws the screen with. */
+@Composable
+internal fun DisplayDriverChoice(state: SettingsState, onChange: (SettingsChange) -> Unit) {
+    val installed = state.displayDrivers.map { it.id }.toSet()
+    Choice(
+        "Display driver",
+        "The Android Turnip that puts each frame on the screen, separate from the one games draw with. " +
+            "Change it when the picture stutters or tears; it applies from the next SteamOS start.",
+        listOf(DisplayDrivers.BUNDLED) + state.displayDrivers.map { it.id }, state.displayDriver,
+        label = { id ->
+            if (id == DisplayDrivers.BUNDLED) "Built-in"
+            else state.displayDrivers.first { it.id == id }.let { d ->
+                d.name + if (state.gpu?.family != null && state.gpu.family in d.families) " (for this GPU)" else ""
+            }
+        },
+        extra = {
+            for (d in state.displayCatalog.filter { it.id !in installed }) {
+                val progress = state.driverDownload?.takeIf { it.first == d.id }?.second
+                SecondaryButton(onClick = { onChange(SettingsChange.DisplayDriverInstall(d)) }) {
+                    Text(if (progress != null) "Downloading ${(progress * 100).toInt()}%" else "Download ${d.label}")
+                }
+            }
+            for (d in state.displayDrivers) {
+                if (d.id != state.displayDriver && !d.bundled) {
+                    SecondaryButton(onClick = { onChange(SettingsChange.DisplayDriverRemove(d.id)) }) { Text("Remove ${d.name}") }
+                }
+            }
+        },
+    ) { onChange(SettingsChange.DisplayDriver(it)) }
+}
+
+/** Decky Loader: install, turn on and off, remove. */
+@Composable
+private fun DeckyCard(state: SettingsState, onChange: (SettingsChange) -> Unit) {
+    SettingCard(
+        "Decky Loader" + (state.decky?.let { " · $it" } ?: ""),
+        "Plugins in Steam's Quick Access Menu. While it is on, Steam opens its debugging port on this device, " +
+            "which lets other apps on it control Steam; turn it off when you do not use it.",
+    ) {
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            val progress = state.deckyDownload
+            when {
+                progress != null -> SecondaryButton(onClick = {}) { Text("Downloading ${(progress * 100).toInt()}%") }
+                state.decky == null -> PrimaryButton(onClick = { onChange(SettingsChange.DeckyInstall) }) { Text("Install") }
+                else -> {
+                    if (state.deckyEnabled) SecondaryButton(onClick = { onChange(SettingsChange.DeckyEnabled(false)) }) { Text("Turn off") }
+                    else PrimaryButton(onClick = { onChange(SettingsChange.DeckyEnabled(true)) }) { Text("Turn on") }
+                    SecondaryButton(onClick = { onChange(SettingsChange.DeckyInstall) }) { Text("Update") }
+                    SecondaryButton(onClick = { onChange(SettingsChange.DeckyUninstall) }) { Text("Remove") }
+                }
+            }
+        }
+    }
+}
+
+/** On/off settings that need nothing but a switch, grouped by the section they show in. */
+internal enum class SettingFlag(
+    val section: String,
+    val title: String,
+    val detail: String,
+    val default: Boolean,
+    val get: (Context) -> Boolean,
+    val set: (Context, Boolean) -> Unit,
+) {
+    CLIENT_TUNING(
+        "Steam", "Faster Steam interface",
+        "Lazy descriptors, threaded GL and no GL error checks for Steam's interface, which draws with OpenGL on Vulkan.",
+        true, Settings::clientTuning, Settings::setClientTuning,
+    ),
+    PATCHED_GAMESCOPE(
+        "Steam", "Patched gamescope",
+        "Touch in Big Picture and realtime GPU priority for the compositor. Turn off to use the runtime's own " +
+            "gamescope if the picture misbehaves.",
+        true, Settings::patchedGamescope, Settings::setPatchedGamescope,
+    ),
+    DECK_MODE(
+        "Steam", "Steam Deck mode",
+        "Steam runs as on a Steam Deck: the Quick Access Menu with battery, NIS scaling and the performance overlay. " +
+            "Steam's own Deck settings may show options that do nothing here.",
+        false, Settings::deckMode, Settings::setDeckMode,
+    ),
+    START_OFFLINE(
+        "Steam", "Start Steam offline",
+        "Steam starts without Valve's servers, as the account you last signed in with. Installed games still play; " +
+            "the store, downloads and friends wait until you turn this off.",
+        false, OfflineMode::enabled, OfflineMode::setEnabled,
+    ),
+    NO_XALIA(
+        "Steam", "Skip Proton's xalia helper",
+        "Xalia lets a pad drive some games' menus through accessibility; it starts with every game and can hang here.",
+        true, Settings::noXalia, Settings::setNoXalia,
+    ),
 }
