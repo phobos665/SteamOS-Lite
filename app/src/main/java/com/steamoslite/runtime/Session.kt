@@ -28,12 +28,15 @@ class Session(
     private val width: Int,
     private val height: Int,
     private val refreshHz: Int,
+    /** A steam:// URL for the client to act on as it starts (an install), or null. */
+    private val url: String? = null,
     private val onExit: (Int) -> Unit,
 ) {
     private val context = context.applicationContext
     private val root = LinuxRuntime.rootDir(this.context)
     private val pulse = PulseAudio(this.context)
     private val network = NetworkLink(this.context, root)
+    private val steamDownloads = com.steamoslite.games.SteamDownloadNotifier(this.context)
     private var process: SessionProcess? = null
     private val storeBridge = StoreBridge(this.context)
 
@@ -144,6 +147,7 @@ class Session(
         guest += LinuxRuntime.SESSION_SCRIPT
         guest += LinuxRuntime.MODE_STEAM
         appId?.let { guest += "steam://rungameid/$it" }
+        url?.let { guest += it }
 
         val binds = mutableListOf(fakeInputDir.path + ":/dev/input")
         // The SD card's library: the scripts register /mnt/bannerlator-sd with the client as its
@@ -175,6 +179,7 @@ class Session(
         network.publish()
         network.start()
         pulse.start()
+        steamDownloads.start()
         mark("network link and audio started")
         process = SessionProcess(command, hostEnv, root, File(logs, "proot.log")) { status ->
             Log.i(TAG, "session ended: $status")
@@ -195,6 +200,7 @@ class Session(
         storeBridge.stop()
         network.stop()
         pulse.stop()
+        steamDownloads.stop()
         logDir?.let { collectLogs(it) }
         stopAppLog()
     }

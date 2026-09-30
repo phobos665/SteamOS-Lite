@@ -131,7 +131,7 @@ class SessionActivity : ComponentActivity() {
         getSystemService(InputManager::class.java).registerInputDeviceListener(inputDevices, main)
         SessionHost.onEnded = closeOnEnd
 
-        if (SessionHost.running) resume(intent.getStringExtra(EXTRA_APP_ID))
+        if (SessionHost.running) resume(intent.getStringExtra(EXTRA_APP_ID), intent.getStringExtra(EXTRA_URL))
         surface.holder.addCallback(object : SurfaceHolder.Callback {
             override fun surfaceCreated(holder: SurfaceHolder) {
                 if (!SessionHost.compositorStarted) {
@@ -167,7 +167,7 @@ class SessionActivity : ComponentActivity() {
         controllers.start()
         val appId = intent.getStringExtra(EXTRA_APP_ID)
         val app = applicationContext
-        val s = Session(app, appId, output.width, output.height, refreshHz()) { status ->
+        val s = Session(app, appId, output.width, output.height, refreshHz(), intent.getStringExtra(EXTRA_URL)) { status ->
             main.post {
                 android.util.Log.i(TAG, "Steam exited ($status)")
                 SessionHost.end(app)
@@ -525,16 +525,18 @@ class SessionActivity : ComponentActivity() {
         super.onNewIntent(intent)
         setIntent(intent)
         setMenuItems()
-        if (SessionHost.running) resume(intent.getStringExtra(EXTRA_APP_ID))
+        if (SessionHost.running) resume(intent.getStringExtra(EXTRA_APP_ID), intent.getStringExtra(EXTRA_URL))
     }
 
     /**
      * Shows a session that was already running: straight to the picture, or, for a game, a
      * loading screen until the client has it running.
      */
-    private fun resume(appId: String?) {
+    private fun resume(appId: String?, url: String?) {
         timeline = StartupTimeline(intent.getLongExtra(EXTRA_TAPPED_AT, System.currentTimeMillis()))
         timeline.mark("SteamOS already running")
+        // A URL (an install, say) goes to the client with Big Picture on screen, for its dialog.
+        url?.let { SessionHost.send(this, it) }
         if (appId == null) {
             hideLoading()
             return
@@ -644,6 +646,8 @@ class SessionActivity : ComponentActivity() {
         private const val TAG = "SessionActivity"
 
         const val EXTRA_APP_ID = "app_id"
+        /** A steam:// URL for the client to act on, with Big Picture shown (an install). */
+        const val EXTRA_URL = "steam_url"
         const val EXTRA_TAPPED_AT = "tapped_at"
         private const val GAME_LAUNCHING = 1
         private const val GAME_RUNNING = 2

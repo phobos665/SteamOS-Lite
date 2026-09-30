@@ -89,6 +89,7 @@ import com.steamoslite.stores.Stores
 import com.steamoslite.util.LogShare
 import java.io.File
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -129,6 +130,7 @@ class MainActivity : ComponentActivity() {
                             onPlay = { launch(game.appId) },
                             onPin = if (HomeShortcuts.supported(this)) ({ pin(game) }) else null,
                             onSettings = { settingsFor = game.appId to game.name },
+                            onInstall = { install(game.appId) },
                         )
                     }
                     storeGameFor != null -> storeGameFor?.let { game ->
@@ -174,6 +176,17 @@ class MainActivity : ComponentActivity() {
         if (!HomeShortcuts.pin(this, game)) {
             Toast.makeText(this, "The home screen did not accept the shortcut.", Toast.LENGTH_LONG).show()
         }
+    }
+
+    /**
+     * Asks Steam to install [appId]: SteamOS comes to the front (starting if it is not running)
+     * with the request, so Steam's install dialog, or its download page, is on screen.
+     */
+    private fun install(appId: String) {
+        startActivity(Intent(this, SessionActivity::class.java).apply {
+            putExtra(SessionActivity.EXTRA_URL, "steam://install/$appId")
+            putExtra(SessionActivity.EXTRA_TAPPED_AT, System.currentTimeMillis())
+        })
     }
 
     private fun launch(appId: String?) {
@@ -235,7 +248,9 @@ private fun Home(
         }
     }
     val ready = state is RuntimeState.Ready
-    val games by produceState(initialValue = emptyList<InstalledGame>(), resumeCount, ready) {
+    // Bumped when a download finishes while the library is open, so the game moves up to Installed.
+    var libraryVersion by remember { mutableStateOf(0) }
+    val games by produceState(initialValue = emptyList<InstalledGame>(), resumeCount, ready, libraryVersion) {
         if (ready) value = withContext(Dispatchers.IO) {
             // Frontends' shortcuts follow the library: games installed or removed in the last
             // session are added or dropped here (nothing happens while exporting is off).
@@ -243,7 +258,16 @@ private fun Home(
         }
     }
     val uninstalled by produceState(initialValue = emptyList<UninstalledGame>(), games) {
-        if (ready) value = withContext(Dispatchers.IO) { SteamLibrary.uninstalledGames(context, games.map { it.appId }) }
+        if (!ready) return@produceState
+        value = withContext(Dispatchers.IO) { SteamLibrary.uninstalledGames(context, games.map { it.appId }) }
+        // While something downloads, its percentage follows along (the rest of the list stays put).
+        while (value.any { it.download != null }) {
+            delay(3_000)
+            val downloads = withContext(Dispatchers.IO) { SteamLibrary.downloads(context) }.associateBy { it.appId }
+            val finished = value.any { it.download != null && it.appId !in downloads }
+            value = value.map { game -> downloads[game.appId] ?: game.copy(download = null) }
+            if (finished) libraryVersion++
+        }
     }
 
     // SteamOS may still be running from before (left running, or the app switched away from it).

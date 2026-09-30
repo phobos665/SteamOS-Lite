@@ -215,7 +215,14 @@ class Screenshots {
 
     @Test fun game_details_complete() = gameDetails(allAchievements)
 
-    private fun gameDetails(list: List<com.steamoslite.util.SteamFiles.Achievement>) = paparazzi.snapshot {
+    @Test fun game_details_not_installed() = gameDetails(emptyList(), InstallState.NotInstalled)
+
+    @Test fun game_details_downloading() = gameDetails(emptyList(), InstallState.Downloading(0.42f))
+
+    private fun gameDetails(
+        list: List<com.steamoslite.util.SteamFiles.Achievement>,
+        install: InstallState = InstallState.Installed,
+    ) = paparazzi.snapshot {
         val game = games[0].first
         AppTheme(stillFrame = true) {
             GameDetailsScreen(
@@ -231,6 +238,7 @@ class Screenshots {
                 ),
                 onBack = {}, onPlay = {}, onPin = {}, onSettings = {},
                 image = { _, _ -> null },
+                install = install,
             )
         }
     }

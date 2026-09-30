@@ -64,24 +64,7 @@ object SteamLibrary {
     fun uninstalledGames(context: Context, installed: Collection<String>): List<UninstalledGame> {
         val root = steamRoot(context)
         val installedIds = installed.toSet()
-        val libraries = listOfNotNull(File(root, "steamapps"), Session.sdLibrary(context)?.let { File(it, "steamapps") })
-        val pending = libraries.flatMap { dir ->
-            dir.listFiles { f -> f.name.matches(Regex("appmanifest_\\d+\\.acf")) }.orEmpty().asList()
-        }.mapNotNull { manifest ->
-            val text = runCatching { manifest.readText() }.getOrNull() ?: return@mapNotNull null
-            fun field(key: String) = Regex("\"$key\"\\s+\"([^\"]*)\"", RegexOption.IGNORE_CASE).find(text)?.groupValues?.get(1)
-            val appId = field("appid") ?: return@mapNotNull null
-            val flags = field("StateFlags")?.toIntOrNull() ?: 0
-            val name = field("name")?.takeIf { it.isNotBlank() } ?: "App $appId"
-            if (appId in installedIds || appId in NOT_GAMES || TOOL_PREFIXES.any { name.startsWith(it) } ||
-                (flags and STATE_FULLY_INSTALLED) != 0) return@mapNotNull null
-            val download = UninstalledGame.Download(
-                field("BytesDownloaded")?.toLongOrNull() ?: 0L,
-                field("BytesToDownload")?.toLongOrNull() ?: 0L,
-            )
-            UninstalledGame(appId, name, cover(root, appId), download)
-        }.distinctBy { it.appId }
-
+        val pending = downloads(context).filter { it.appId !in installedIds }
         val known = installedIds + pending.map { it.appId } + NOT_GAMES
         val cached = File(root, "appcache/librarycache").listFiles().orEmpty()
             .mapNotNull { f -> Regex("^(\\d+)(_.*)?").find(f.name)?.groupValues?.get(1) }
@@ -91,7 +74,32 @@ object SteamLibrary {
         val owned = kinds.filter { (_, kind) -> kind.type == "game" || kind.type == "demo" }
             .map { (id, kind) -> UninstalledGame(id.toString(), kind.name, cover(root, id.toString()), null) }
             .sortedBy { it.name.lowercase() }
-        return pending.sortedBy { it.name.lowercase() } + owned
+        return pending + owned
+    }
+
+    /** Whether the client has [appId] fully installed. */
+    fun isInstalled(context: Context, appId: String) = installedGames(context).any { it.appId == appId }
+
+    /** Games the client has a manifest for but has not finished installing: queued, downloading or updating. */
+    fun downloads(context: Context): List<UninstalledGame> {
+        val root = steamRoot(context)
+        val libraries = listOfNotNull(File(root, "steamapps"), Session.sdLibrary(context)?.let { File(it, "steamapps") })
+        return libraries.flatMap { dir ->
+            dir.listFiles { f -> f.name.matches(Regex("appmanifest_\\d+\\.acf")) }.orEmpty().asList()
+        }.mapNotNull { manifest ->
+            val text = runCatching { manifest.readText() }.getOrNull() ?: return@mapNotNull null
+            fun field(key: String) = Regex("\"$key\"\\s+\"([^\"]*)\"", RegexOption.IGNORE_CASE).find(text)?.groupValues?.get(1)
+            val appId = field("appid") ?: return@mapNotNull null
+            val flags = field("StateFlags")?.toIntOrNull() ?: 0
+            val name = field("name")?.takeIf { it.isNotBlank() } ?: "App $appId"
+            if (appId in NOT_GAMES || TOOL_PREFIXES.any { name.startsWith(it) } ||
+                (flags and STATE_FULLY_INSTALLED) != 0) return@mapNotNull null
+            val download = UninstalledGame.Download(
+                field("BytesDownloaded")?.toLongOrNull() ?: 0L,
+                field("BytesToDownload")?.toLongOrNull() ?: 0L,
+            )
+            UninstalledGame(appId, name, cover(root, appId), download)
+        }.distinctBy { it.appId }.sortedBy { it.name.lowercase() }
     }
 
     /** (appid, name, StateFlags) from a manifest, or null when it cannot be read. */
