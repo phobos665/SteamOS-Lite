@@ -79,6 +79,7 @@ import com.steamoslite.frontend.FrontendExport
 import com.steamoslite.frontend.HomeShortcuts
 import com.steamoslite.games.InstalledGame
 import com.steamoslite.games.SteamLibrary
+import com.steamoslite.games.UninstalledGame
 import com.steamoslite.runtime.InstallService
 import com.steamoslite.runtime.InstallStatus
 import com.steamoslite.runtime.RuntimeInstaller
@@ -241,6 +242,9 @@ private fun Home(
             SteamLibrary.installedGames(context).also { FrontendExport.sync(context, it) }
         }
     }
+    val uninstalled by produceState(initialValue = emptyList<UninstalledGame>(), games) {
+        if (ready) value = withContext(Dispatchers.IO) { SteamLibrary.uninstalledGames(context, games.map { it.appId }) }
+    }
 
     // SteamOS may still be running from before (left running, or the app switched away from it).
     var sessionRunning by remember { mutableStateOf(false) }
@@ -260,6 +264,7 @@ private fun Home(
     HomeScreen(
         state = shown,
         games = games,
+        uninstalled = uninstalled,
         onInstall = { InstallService.start(context, it) },
         onCancel = { InstallService.cancel(context) },
         onRetry = {
@@ -288,6 +293,8 @@ private fun Home(
 internal fun HomeScreen(
     state: RuntimeState,
     games: List<InstalledGame>,
+    /** Owned games that are not installed, shown after a divider; downloads in progress first. */
+    uninstalled: List<UninstalledGame> = emptyList(),
     onInstall: (RuntimeInstaller.Release) -> Unit,
     onCancel: () -> Unit,
     onRetry: () -> Unit,
@@ -339,7 +346,7 @@ internal fun HomeScreen(
             }
         }
         if (state is RuntimeState.Ready) {
-            Library(state, games, layout, title, onLaunch, { state.update?.let(onInstall) }, onShareLogs, onOpenProtons, onOpenDetails, coverOf,
+            Library(state, games, uninstalled, layout, title, onLaunch, { state.update?.let(onInstall) }, onShareLogs, onOpenProtons, onOpenDetails, coverOf,
                 tab, onSelectTab, storeTab, storeActions, storeCoverOf, sessionRunning, onStopSession)
         } else {
             Column(Modifier.fillMaxSize().enterFade().verticalScroll(rememberScrollState()).padding(layout.padding)) {
@@ -423,6 +430,7 @@ private fun Progress(s: RuntimeState.Installing, onCancel: () -> Unit) {
 private fun Library(
     s: RuntimeState.Ready,
     games: List<InstalledGame>,
+    uninstalled: List<UninstalledGame>,
     layout: HomeLayout,
     title: @Composable (middle: @Composable () -> Unit) -> Unit,
     onLaunch: (String?) -> Unit,
@@ -503,6 +511,19 @@ private fun Library(
                     if (onOpenDetails != null) onOpenDetails(game) else onLaunch(game.appId)
                 }
             }
+            if (uninstalled.isNotEmpty()) {
+                item(key = "uninstalled", span = full) {
+                    Box(Modifier.padding(top = layout.gap)) { LabelDivider("Not installed · ${uninstalled.size}") }
+                }
+                items(uninstalled, key = { "u" + it.appId }) { game ->
+                    val cover = coverOf(game.asGame())
+                    val badge = game.download?.let { "Downloading ${(it.fraction * 100).toInt()}%" }
+                    Tile(game.name, cover, badge = badge, dimmed = true, onMenu = { onOpenDetails?.invoke(game.asGame()) },
+                        onFocused = { focusedArt = cover }) {
+                        onOpenDetails?.invoke(game.asGame())
+                    }
+                }
+            }
         }
     }
 }
@@ -522,6 +543,8 @@ internal fun Tile(
     title: String,
     cover: Bitmap?,
     badge: String? = null,
+    /** Shown faded: a game that is owned but not installed. */
+    dimmed: Boolean = false,
     onMenu: () -> Unit,
     onFocused: () -> Unit = {},
     onClick: () -> Unit,
@@ -547,9 +570,9 @@ internal fun Tile(
         contentAlignment = Alignment.Center,
     ) {
         if (cover != null) {
-            Image(cover.asImageBitmap(), title, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+            Image(cover.asImageBitmap(), title, Modifier.fillMaxSize(), contentScale = ContentScale.Crop, alpha = if (dimmed) 0.45f else 1f)
         } else {
-            Text(title, color = AppColors.text, textAlign = TextAlign.Center, modifier = Modifier.padding(8.dp))
+            Text(title, color = if (dimmed) AppColors.textMuted else AppColors.text, textAlign = TextAlign.Center, modifier = Modifier.padding(8.dp))
         }
         if (badge != null) {
             Text(

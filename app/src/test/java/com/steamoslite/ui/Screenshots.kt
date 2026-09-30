@@ -72,11 +72,16 @@ class Screenshots {
         shareLogs: Boolean = false,
         running: Boolean = false,
         tabs: Boolean = false,
+        split: Boolean = false,
     ) = paparazzi.snapshot {
         AppTheme(stillFrame = true) {
             HomeScreen(
                 state = state,
-                games = if (withGames) games.map { it.first } else emptyList(),
+                games = if (!withGames) emptyList() else if (split) games.take(4).map { it.first } else games.map { it.first },
+                uninstalled = if (!split) emptyList() else games.drop(4).mapIndexed { i, (g) ->
+                    com.steamoslite.games.UninstalledGame(g.appId, g.name, null,
+                        if (i == 0) com.steamoslite.games.UninstalledGame.Download(4_200_000_000L, 10_000_000_000L) else null)
+                },
                 onInstall = {},
                 onCancel = {},
                 onRetry = {},
@@ -103,6 +108,8 @@ class Screenshots {
     @Test fun setup_resume() = home(RuntimeState.Missing(release, 331_000_000L))
 
     @Test fun library() = home(RuntimeState.Ready("r9", null), shareLogs = true)
+
+    @Test fun library_not_installed() = home(RuntimeState.Ready("r9", null), shareLogs = true, split = true)
 
     @Test fun compatibility_tools() = paparazzi.snapshot {
         AppTheme(stillFrame = true) {
