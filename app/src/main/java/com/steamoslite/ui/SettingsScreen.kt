@@ -841,7 +841,7 @@ internal enum class SettingFlag(
 ) {
     CLIENT_TUNING(
         "Steam", "Faster Steam interface",
-        "Lazy descriptors, threaded GL and no GL error checks for Steam's interface, which draws with OpenGL on Vulkan.",
+        "Lazy, compact descriptors, threaded GL, no GL error checks and a single shader cache file for Steam's interface, which draws with OpenGL on Vulkan.",
         true, Settings::clientTuning, Settings::setClientTuning,
     ),
     PATCHED_GAMESCOPE(

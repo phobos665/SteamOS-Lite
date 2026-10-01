@@ -131,8 +131,18 @@ object Settings {
 
     fun setClientAllCores(context: Context, on: Boolean) = put(context) { putBoolean(CLIENT_ALL_CORES, on) }
 
-    /** Steam's interface is OpenGL on Zink: lazy descriptors, threaded GL and no GL error checks. */
-    val CLIENT_TUNING_ENV = mapOf("ZINK_DESCRIPTORS" to "lazy", "mesa_glthread" to "true", "MESA_NO_ERROR" to "1")
+    /**
+     * Steam's interface is OpenGL on Zink: lazy descriptors packed into fewer sets, threaded GL and
+     * no GL error checks. Mesa's shader cache is one database rather than a file per entry, so a
+     * lookup is a read, not an open (and a store not a rename) that proot has to stop for.
+     */
+    val CLIENT_TUNING_ENV = mapOf(
+        "ZINK_DESCRIPTORS" to "lazy",
+        "ZINK_DEBUG" to "compact",
+        "mesa_glthread" to "true",
+        "MESA_NO_ERROR" to "1",
+        "MESA_DISK_CACHE_DATABASE" to "1",
+    )
 
     fun clientTuning(context: Context) = prefs(context).getBoolean(CLIENT_TUNING, true)
 
