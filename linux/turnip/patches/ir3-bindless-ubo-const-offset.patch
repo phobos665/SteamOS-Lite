@@ -1,0 +1,16 @@
+Bindless UBO loads are only lowered to constants when their offset is constant too: lowering one
+with a dynamic offset read the wrong range, which broke shaders on the Adreno 740 (Snapdragon 8 Gen
+2). From SteamOS-ARM-Handhelds (hashtagbasit), which took it from ROCKNIX and ArmadaOS.
+
+--- a/src/freedreno/ir3/ir3_nir_analyze_ubo_ranges.c
++++ b/src/freedreno/ir3/ir3_nir_analyze_ubo_ranges.c
+@@ -60,7 +60,8 @@
+       return true;
+    } else {
+       nir_intrinsic_instr *rsrc = ir3_bindless_resource(instr->src[0]);
+-      if (rsrc && nir_src_is_const(rsrc->src[0])) {
++      if (rsrc && nir_src_is_const(rsrc->src[0]) &&
++          nir_src_is_const(instr->src[1])) {
+          ubo->global_base = NULL;
+          ubo->block = nir_src_as_uint(rsrc->src[0]);
+          ubo->bindless_base = nir_intrinsic_desc_set(rsrc);
