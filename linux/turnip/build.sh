@@ -12,7 +12,8 @@
 #   a6xx  No cached-coherent memory (a6xx instability) and sysmem rendering forced (no GMEM).
 # Every variant gets the runtime's own KGSL patches (patches/), which the session needs: a DRM
 # device identity for gamescope's dma-buf feedback, and no crash when a game asks for calibrated
-# timestamps. A patch that no longer applies fails the build rather than shipping without it.
+# timestamps. Also an ir3 shader fix for the Adreno 740, and every chip id an Adreno 830 reports.
+# A patch that no longer applies fails the build rather than shipping without it.
 #
 # Run on an aarch64 host. The zip holds libvulkan_freedreno.so and meta.json; the app writes the
 # ICD manifest on import, since library_path must be the path the driver ends up at.
@@ -37,6 +38,14 @@ version=$(cat VERSION)
 
 for p in "$here"/patches/*.patch; do
   patch -p1 --forward --fuzz=2 < "$p" || { echo "$(basename "$p") does not apply to $repo@$commit" >&2; exit 1; }
+done
+
+# Every id an Adreno 830 reports (revision 0 and 1, by KGSL and msm), only those Mesa lacks.
+devices=src/freedreno/common/freedreno_devices.py
+anchor='GPUId(chip_id=0xffff44050000, name="Adreno (TM) 830"),'
+grep -qF "$anchor" "$devices" || { echo "no Adreno 830 entry in $devices" >&2; exit 1; }
+for id in 0x44050001 0x44050000 0xffff44050001; do
+  grep -q "chip_id=$id," "$devices" || sed -i "/$(printf %s "$anchor" | sed 's/[]\/$*.^[]/\\&/g')/a\\        GPUId(chip_id=$id, name=\"Adreno (TM) 830\")," "$devices"
 done
 
 case $variant in

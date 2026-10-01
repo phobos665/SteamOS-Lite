@@ -187,6 +187,8 @@ object Settings {
         "MESA_SHADER_CACHE_MAX_SIZE" to "512MB",
         "DXVK_ASYNC" to "1",
         "DXVK_GPLASYNCCACHE" to "1",
+        // Wine's own Direct3D on Vulkan: on OpenGL it runs through Zink, where games hang at their splash screen.
+        "WINE_D3D_CONFIG" to "renderer=vulkan",
     )
 
     fun compatFlags(context: Context) = prefs(context).getBoolean(COMPAT_FLAGS, true)
